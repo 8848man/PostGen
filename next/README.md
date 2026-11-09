@@ -14,7 +14,7 @@
 
 ## 비용·인증
 
-직접 API 호출은 `OPENAI_API_KEY` 또는 `ANTHROPIC_API_KEY` 환경 변수를 사용한다. 모델 이름은 생성 화면에서 지정한다. `POSTGEN_PRICE_TABLE`은 가격표 JSON 파일 경로이며 키는 `provider:model`, 값은 `inputPerMillion`, `outputPerMillion`이다. `POSTGEN_COST_LIMIT_USD`로 요청별 한도를 지정할 수 있다. 가격표가 없으면 금액을 추정하지 않고 실행 전 확인한다. 이미지 비용도 실행 전 확인한다. API 키를 PostGen JSON 파일에 저장하지 않는다.
+직접 API 호출은 `OPENAI_API_KEY` 또는 `ANTHROPIC_API_KEY` 환경 변수를 사용한다. 모델 이름은 생성 화면에서 지정한다. `POSTGEN_PRICE_TABLE`은 가격표 JSON 파일 경로이며 키는 `provider:model`, 값은 `inputPerMillion`, `outputPerMillion`이다. `POSTGEN_COST_LIMIT_USD`로 요청별 한도를 지정할 수 있다. 이미지 가격표 키는 `image:openai:<model>:generation` 또는 `image:openai:<model>:edit`이며, 값에 확인한 이미지 1회 가격 `perImageUsd`, `verified: true`, 가격 출처 `sourceUrl`, 확인일 `verifiedAt`(YYYY-MM-DD)을 기록한다. 해당 항목이 없으면 이미지 비용은 추정 불가로 표시한다. 자동 이미지 점검 비용은 별도이며 총액에 포함되지 않는다. 가격표가 없으면 금액을 추정하지 않고 실행 전 확인한다. API 키를 PostGen JSON 파일에 저장하지 않는다.
 
 ## 미완료 검증
 

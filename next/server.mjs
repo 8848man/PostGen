@@ -10,7 +10,7 @@ import { collectSelected } from './sources.mjs';
 import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources } from './core.mjs';
 import { generateDraft, generatePlan, draftPrompt } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
-import { estimateTextRequest, requireCostAcknowledgement } from './cost.mjs';
+import { estimateTextRequest, estimateImageRequest, requireCostAcknowledgement } from './cost.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, generateImage, checkImage } from './images.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
@@ -149,15 +149,24 @@ const server = http.createServer(async (req, res) => {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');
       return json(res, 200, { state: mutateState(current => approveImagePlan(current, input.jobId, input.assetId || null)) });
     }
+    if (url.pathname === '/api/images/estimate') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      const image = job?.draft?.images.find(item => item.id === input.imageId);
+      if (job?.status !== 'draft' || !job.draft.imagePlanApproved || !image || image.generatedPath) throw new Error('Image is not ready for generation');
+      const settings = loadSettings();
+      return json(res, 200, { estimate: estimateImageRequest({ model: input.model || 'gpt-image-2.5-sunburst', hasAsset: Boolean(image.assetId), attempts: settings.autoImageCheck ? settings.maxImageGenerations : 1, autoCheck: settings.autoImageCheck }) });
+    }
     if (url.pathname === '/api/images/generate') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const image = job?.draft?.images.find(item => item.id === input.imageId);
       if (job?.status !== 'draft' || !job.draft.imagePlanApproved || !image) throw new Error('Image plan is not approved');
       const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
       if (image.assetId && !asset) throw new Error('Selected asset unavailable');
-      if (input.costAcknowledged !== true) throw new Error('Image cost requires confirmation');
       const settings = loadSettings();
       const attempts = settings.autoImageCheck ? settings.maxImageGenerations : 1;
+      const estimate = estimateImageRequest({ model: input.model || 'gpt-image-2.5-sunburst', hasAsset: Boolean(asset), attempts, autoCheck: settings.autoImageCheck });
+      requireCostAcknowledgement(estimate, input.costAcknowledged === true);
+      if (input.costAcknowledged !== true) throw new Error('Image cost requires confirmation');
       let result, check = null, feedback = '';
       for (let attempt = 1; attempt <= attempts; attempt++) {
         result = await generateImage({ description: `${image.description}${feedback}`, asset, model: input.model || undefined });
