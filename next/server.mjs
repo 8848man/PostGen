@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan, draftPrompt } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { estimateTextRequest, estimateImageRequest, requireCostAcknowledgement } from './cost.mjs';
@@ -85,6 +85,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/discover') return json(res, 200, discover(url.searchParams.get('workspace') || process.cwd(), { query: url.searchParams.get('query') || '' }));
     if (req.method !== 'POST' || req.headers.origin !== origin) return json(res, 404, { error: 'Not found' });
     const input = await inputJson(req);
+    if (url.pathname === '/api/retention/restore') return json(res, 200, { state: mutateState(current => restoreRetainedSources(current, input.jobId)) });
     if (url.pathname === '/api/account') return json(res, 200, { registry: mutateRegistry(current => addAccount(current, input)) });
     if (url.pathname === '/api/settings') return json(res, 200, { settings: updateSettings(input) });
     if (url.pathname === '/api/connector') return json(res, 200, { connectors: registerConnector(input) });
@@ -114,6 +115,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/generate') {
       const current = loadState(); let job = current.jobs.find(item => item.id === input.jobId);
       if (!job || !['selected','draft'].includes(job.status)) throw new Error('Job is not ready for generation');
+      if (job.sources.some(source => source.expired)) throw new Error('Source copy expired; restore it or create a new job');
       const registry = loadRegistry(), account = registry.accounts.find(item => item.id === job.accountId);
       if (!account) throw new Error('Account no longer exists');
       const sample = resolveAccount(registry, account.channel, account.handle).sample;
@@ -142,8 +144,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/draft/lock') return json(res, 200, { lock: acquireDraftLock(input.jobId) });
     if (url.pathname === '/api/draft/unlock') return json(res, 200, { released: releaseDraftLock(input.jobId, input.token) });
     if (url.pathname === '/api/draft') {
-      if (!input.lockToken || !Number.isInteger(input.expectedDraftRevision)) throw new Error('Draft edit lock and revision required');
-      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, input.draft, input.diagnostics || []), { draftLockToken: input.lockToken, expectedDraftRevision: input.expectedDraftRevision }) });
+      const existingJob = loadState().jobs.find(item => item.id === input.jobId);
+      if (!existingJob) throw new Error('Unknown job');
+      if (existingJob.status === 'draft' && (!input.lockToken || !Number.isInteger(input.expectedDraftRevision))) throw new Error('Draft edit lock and revision required');
+      const options = existingJob.status === 'draft' ? { draftLockToken: input.lockToken, expectedDraftRevision: input.expectedDraftRevision } : undefined;
+      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, input.draft, input.diagnostics || []), options) });
     }
     if (url.pathname === '/api/images/approve-plan') {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');
@@ -233,6 +238,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(0, '127.0.0.1', () => {
   origin = `http://127.0.0.1:${server.address().port}`;
   process.stdout.write(`${origin}/#token=${token}\n`);
+  statusState();
+  setInterval(() => { try { statusState(); } catch (error) { process.stderr.write(`Retention cleanup failed: ${error.message}\n`); } }, 86_400_000).unref();
   if (process.platform === 'win32') setInterval(() => {
     try {
       if (!loadSettings().backgroundNotifications && process.env.POSTGEN_BACKGROUND_NOTIFICATIONS !== '1') return;

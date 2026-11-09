@@ -30,7 +30,15 @@ try {
   if (scheduled.state.jobs[0].status !== 'awaiting_registration') throw new Error('Job was not queued for platform registration');
   const preparing = await api('/api/start', { jobId });
   if (preparing.state.jobs[0].status !== 'preparing') throw new Error('Job was not prepared for platform registration');
-  process.stdout.write('Next server smoke passed: settings, account, source, approval, platform reservation queue\n');
+  const jobsFile = path.join(dir, 'next', 'jobs.json');
+  const stored = JSON.parse(fs.readFileSync(jobsFile, 'utf8'));
+  stored.jobs[0].createdAt = '2026-01-01T00:00:00Z';
+  fs.writeFileSync(jobsFile, JSON.stringify(stored));
+  const pruned = (await api('/api/state')).state;
+  if (pruned.jobs[0].sources[0].text !== null || pruned.retentionTrash.length !== 1) throw new Error('Expired source was not moved to retention trash');
+  const restored = (await api('/api/retention/restore', { jobId })).state;
+  if (restored.jobs[0].sources[0].text !== 'selected source') throw new Error('Retention restore failed');
+  process.stdout.write('Next server smoke passed: settings, account, source, approval, platform reservation queue, retention restore\n');
 } finally {
   child.kill();
   await new Promise(resolve => child.once('exit', resolve));

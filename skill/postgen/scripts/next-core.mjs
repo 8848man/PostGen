@@ -8,12 +8,13 @@ const DAY = 86_400_000;
 const DRAFT_LOCK_MS = 30 * 60_000;
 const FILE_LOCK_STALE_MS = 60_000;
 export const nextPath = () => path.join(process.env.POSTGEN_NEXT_DIR || path.join(dataDir(), 'next'), 'jobs.json');
-export const emptyState = () => ({ schemaVersion: VERSION, revision: 0, jobs: [] });
+export const emptyState = () => ({ schemaVersion: VERSION, revision: 0, jobs: [], retentionTrash: [] });
 const nonempty = (value, max = 100_000) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 
 export function validateState(state) {
   if (state?.schemaVersion !== VERSION || !Number.isInteger(state.revision) || state.revision < 0 || !Array.isArray(state.jobs)) throw new Error('Invalid next state');
+  if (state.retentionTrash !== undefined && (!Array.isArray(state.retentionTrash) || state.retentionTrash.some(entry => !entry || entry.schemaVersion !== 'retention-trash/v1' || !nonempty(entry.id, 80) || entry.revision !== 1 || !nonempty(entry.jobId, 80) || !iso(entry.createdAt) || !iso(entry.updatedAt) || !iso(entry.removedAt) || !iso(entry.purgeAt) || !Array.isArray(entry.sources) || entry.sources.some(source => !nonempty(source.id, 80) || !nonempty(source.text, 120_000)) || !Array.isArray(entry.diagnostics)))) throw new Error('Invalid retention trash');
   const ids = new Set();
   for (const job of state.jobs) {
     if (!nonempty(job.id, 80) || ids.has(job.id) || !nonempty(job.accountId, 80) || !nonempty(job.audience, 500) || !Array.isArray(job.sources) || !job.sources.length || !['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired','cancelled','failed','unknown'].includes(job.status)) throw new Error('Invalid job');
@@ -289,14 +290,40 @@ export function cancelJob(state, id) { return change(state, id, ['selected','dra
 export function pruneOldSources(state, months = 3, now = new Date()) {
   if (!Number.isInteger(months) || months < 1 || months > 3) throw new Error('Retention must be 1–3 months');
   const next = structuredClone(validateState(state));
+  next.retentionTrash ||= [];
   const cutoff = new Date(now); cutoff.setUTCMonth(cutoff.getUTCMonth() - months);
-  let changed = false;
+  const purgeAt = new Date(now.getTime() + 14 * DAY).toISOString();
+  const beforeTrash = next.retentionTrash.length;
+  next.retentionTrash = next.retentionTrash.filter(entry => Date.parse(entry.purgeAt) > now.getTime());
+  let changed = next.retentionTrash.length !== beforeTrash;
   for (const job of next.jobs) {
-    if (!['published','cancelled'].includes(job.status) || Date.parse(job.createdAt) >= cutoff.getTime()) continue;
-    for (const source of job.sources) if (!source.expired) { source.text = null; source.expired = true; changed = true; }
-    if (job.diagnostics.length) { job.diagnostics = []; changed = true; }
+    if (Date.parse(job.createdAt) >= cutoff.getTime() || Date.parse(job.retentionRestoredUntil || '') > now.getTime()) continue;
+    const sources = job.sources.filter(source => !source.expired).map(source => ({ id: source.id, text: source.text }));
+    if (!sources.length && !job.plan && !job.diagnostics.length) continue;
+    next.retentionTrash.push({ schemaVersion: 'retention-trash/v1', id: crypto.randomUUID(), revision: 1, jobId: job.id, sources, plan: job.plan, diagnostics: job.diagnostics, createdAt: now.toISOString(), updatedAt: now.toISOString(), removedAt: now.toISOString(), purgeAt });
+    for (const source of job.sources) if (!source.expired) { source.text = null; source.expired = true; }
+    job.plan = null;
+    job.diagnostics = [];
+    changed = true;
   }
   if (changed) next.revision++;
   return validateState(next);
 }
 
+export function restoreRetainedSources(state, id, now = new Date()) {
+  const next = structuredClone(validateState(state));
+  const index = (next.retentionTrash || []).findIndex(entry => entry.jobId === id && Date.parse(entry.purgeAt) > now.getTime());
+  if (index < 0) throw new Error('No restorable source copy');
+  const job = next.jobs.find(item => item.id === id);
+  if (!job) throw new Error('Unknown job');
+  const [entry] = next.retentionTrash.splice(index, 1);
+  for (const copy of entry.sources) {
+    const source = job.sources.find(item => item.id === copy.id);
+    if (source?.expired) { source.text = copy.text; source.expired = false; }
+  }
+  if (!job.plan) job.plan = entry.plan;
+  if (!job.diagnostics.length) job.diagnostics = entry.diagnostics;
+  job.retentionRestoredUntil = new Date(now.getTime() + 14 * DAY).toISOString();
+  next.revision++;
+  return validateState(next);
+}

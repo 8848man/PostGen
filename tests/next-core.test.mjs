@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, approveImagePlan, attachGeneratedImage, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources } from '../next/core.mjs';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, approveImagePlan, attachGeneratedImage, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
@@ -82,4 +82,28 @@ test('an uncertain platform submission cannot be silently retried', () => {
   state = markScheduleUnknown(state, id, 'No receipt');
   assert.equal(state.jobs[0].status, 'unknown');
   assert.throws(() => beginScheduleSubmission(state, id, now), /Cannot change unknown job/);
+});
+
+test('expired source copies can be restored for 14 days, then are purged', () => {
+  let state = createJob(emptyState(), { accountId: 'a', audience: 'reader', goal: 'explain', sources: [source] });
+  const id = state.jobs[0].id;
+  state = setDraft(state, id, { title: 'Final title', body: 'Final body', claims: [], images: [], evaluation: { score: 4 } });
+  state.jobs[0].createdAt = '2026-01-01T00:00:00Z';
+  state.jobs[0].plan = { angle: 'Working plan' };
+  state.jobs[0].diagnostics = [{ code: 'review' }];
+  const removed = pruneOldSources(state, 3, new Date('2026-05-01T00:00:00Z'));
+  assert.equal(removed.jobs[0].sources[0].text, null);
+  assert.equal(removed.jobs[0].plan, null);
+  assert.deepEqual(removed.jobs[0].diagnostics, []);
+  assert.equal(removed.jobs[0].draft.body, 'Final body');
+  assert.equal(removed.jobs[0].draft.evaluation.score, 4);
+  assert.equal(removed.retentionTrash.length, 1);
+  const restored = restoreRetainedSources(removed, id, new Date('2026-05-14T00:00:00Z'));
+  assert.equal(restored.jobs[0].sources[0].text, source.text);
+  assert.equal(restored.jobs[0].plan.angle, 'Working plan');
+  assert.equal(restored.retentionTrash.length, 0);
+  assert.equal(pruneOldSources(restored, 3, new Date('2026-05-15T00:00:00Z')).jobs[0].sources[0].text, source.text);
+  const purged = pruneOldSources(removed, 3, new Date('2026-05-16T00:00:00Z'));
+  assert.equal(purged.retentionTrash.length, 0);
+  assert.throws(() => restoreRetainedSources(purged, id, new Date('2026-05-16T00:00:00Z')), /No restorable/);
 });
