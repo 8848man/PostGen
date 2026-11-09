@@ -5,6 +5,8 @@ import { dataDir } from './profile.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
+const DRAFT_LOCK_MS = 30 * 60_000;
+const FILE_LOCK_STALE_MS = 60_000;
 export const nextPath = () => path.join(process.env.POSTGEN_NEXT_DIR || path.join(dataDir(), 'next'), 'jobs.json');
 export const emptyState = () => ({ schemaVersion: VERSION, revision: 0, jobs: [] });
 const nonempty = (value, max = 100_000) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
@@ -30,16 +32,83 @@ export function loadState(file = nextPath()) {
   return validateState(JSON.parse(fs.readFileSync(file, 'utf8')));
 }
 
-export function saveState(next, expectedRevision, file = nextPath()) {
-  validateState(next);
-  const current = loadState(file);
-  if (current.revision !== expectedRevision || next.revision !== expectedRevision + 1) throw new Error('State changed; reload and retry');
+function withFileLock(file, action) {
   const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const temp = path.join(dir, `.jobs-${crypto.randomUUID()}.tmp`);
-  try { fs.writeFileSync(temp, JSON.stringify(next, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
-  finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
-  return next;
+  const lockPath = `${file}.write.lock`;
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    try {
+      fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx', mode: 0o600 });
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try { if (Date.now() - fs.statSync(lockPath).mtimeMs > FILE_LOCK_STALE_MS) fs.unlinkSync(lockPath); }
+      catch (statError) { if (statError.code !== 'ENOENT') throw statError; }
+      if (Date.now() >= deadline) throw new Error('State is busy; retry');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try { return action(); }
+  finally { fs.rmSync(lockPath, { force: true }); }
+}
+
+function draftLockPath(file, id) {
+  if (typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(id)) throw new Error('Invalid job ID');
+  return path.join(path.dirname(file), '.draft-locks', `${id}.json`);
+}
+
+function activeDraftLock(file, id) {
+  const lockPath = draftLockPath(file, id);
+  if (!fs.existsSync(lockPath)) return null;
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  if (Date.parse(lock.expiresAt) > Date.now()) return lock;
+  fs.unlinkSync(lockPath);
+  return null;
+}
+
+export function acquireDraftLock(id, file = nextPath()) {
+  return withFileLock(file, () => {
+    const job = loadState(file).jobs.find(item => item.id === id);
+    if (!job || job.status !== 'draft') throw new Error('Draft is not editable');
+    if (activeDraftLock(file, id)) throw new Error('Draft is being edited; reload later');
+    const lockPath = draftLockPath(file, id);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+    const lock = { token: crypto.randomUUID(), expiresAt: new Date(Date.now() + DRAFT_LOCK_MS).toISOString(), draftRevision: job.draft.revision };
+    fs.writeFileSync(lockPath, JSON.stringify(lock), { flag: 'wx', mode: 0o600 });
+    return lock;
+  });
+}
+
+export function releaseDraftLock(id, token, file = nextPath()) {
+  return withFileLock(file, () => {
+    const lock = activeDraftLock(file, id);
+    if (!lock) return false;
+    if (lock.token !== token) throw new Error('Draft lock belongs to another editor');
+    fs.unlinkSync(draftLockPath(file, id));
+    return true;
+  });
+}
+
+export function saveState(next, expectedRevision, file = nextPath(), { draftLockToken, expectedDraftRevision } = {}) {
+  validateState(next);
+  return withFileLock(file, () => {
+    const current = loadState(file);
+    if (current.revision !== expectedRevision || next.revision !== expectedRevision + 1) throw new Error('State changed; reload and retry');
+    for (const job of next.jobs) {
+      const before = current.jobs.find(item => item.id === job.id);
+      if (!before || JSON.stringify(before) === JSON.stringify(job)) continue;
+      const lock = activeDraftLock(file, job.id);
+      if (draftLockToken && !lock) throw new Error('Draft edit lock expired; reload and retry');
+      if (lock && lock.token !== draftLockToken) throw new Error('Draft is being edited; reload later');
+      if (lock && expectedDraftRevision !== undefined && before.draft?.revision !== expectedDraftRevision) throw new Error('Draft changed; reload and retry');
+    }
+    const dir = path.dirname(file);
+    const temp = path.join(dir, `.jobs-${crypto.randomUUID()}.tmp`);
+    try { fs.writeFileSync(temp, JSON.stringify(next, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); fs.renameSync(temp, file); }
+    finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); }
+    return next;
+  });
 }
 
 function change(state, id, allowed, apply) {

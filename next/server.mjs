@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, loadState, saveState, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources } from './core.mjs';
 import { generateDraft, generatePlan, draftPrompt } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { estimateTextRequest, requireCostAcknowledgement } from './cost.mjs';
@@ -33,10 +33,10 @@ async function inputJson(req) {
   for await (const chunk of req) { bytes += chunk.length; if (bytes > 1_000_000) throw new Error('Request too large'); chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-function mutateState(fn) {
+function mutateState(fn, options) {
   const current = loadState();
   const next = fn(current);
-  saveState(next, current.revision);
+  saveState(next, current.revision, undefined, options);
   return next;
 }
 function mutateRegistry(fn) {
@@ -139,7 +139,12 @@ const server = http.createServer(async (req, res) => {
       if (!account) throw new Error('Unknown account');
       return json(res, 200, { estimate: estimateTextRequest({ provider: input.provider || job.model, model: input.model, promptChars: draftPrompt({ sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan }).length * 3, outputTokens: 12_000 }) });
     }
-    if (url.pathname === '/api/draft') return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, input.draft, input.diagnostics || [])) });
+    if (url.pathname === '/api/draft/lock') return json(res, 200, { lock: acquireDraftLock(input.jobId) });
+    if (url.pathname === '/api/draft/unlock') return json(res, 200, { released: releaseDraftLock(input.jobId, input.token) });
+    if (url.pathname === '/api/draft') {
+      if (!input.lockToken || !Number.isInteger(input.expectedDraftRevision)) throw new Error('Draft edit lock and revision required');
+      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, input.draft, input.diagnostics || []), { draftLockToken: input.lockToken, expectedDraftRevision: input.expectedDraftRevision }) });
+    }
     if (url.pathname === '/api/images/approve-plan') {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');
       return json(res, 200, { state: mutateState(current => approveImagePlan(current, input.jobId, input.assetId || null)) });
