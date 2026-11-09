@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Image editor fixture</title></head><body>
+<span id="account">test-account</span><input id="title"><div id="body" contenteditable="true"></div>
+<p class="paragraph">첫 문단</p><p class="paragraph">둘째 문단</p><input id="image" type="file">
+<script>document.querySelector('#image').addEventListener('change', () => { const image = document.createElement('img'); image.id = 'inserted'; image.alt = 'uploaded'; document.querySelectorAll('.paragraph')[0].after(image); });</script>
+</body></html>

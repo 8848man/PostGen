@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "rules": { "type": "array", "items": { "type": "object", "properties": { "key": { "type": "string" }, "value": { "type": "string" }, "priority": { "type": "string", "enum": ["required", "preferred"] } }, "required": ["key", "value", "priority"], "additionalProperties": false } },
+    "unknowns": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["summary", "rules", "unknowns"],
+  "additionalProperties": false
+}

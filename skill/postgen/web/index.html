@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Postgen 설정</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar"><div class="brand"><span class="mark">P</span><div><strong>Postgen</strong><small>글쓰기 설정</small></div></div><span class="status" id="status">연결 중</span></header>
+  <main class="layout">
+    <section class="workspace">
+      <div class="intro"><div class="eyebrow">STYLE STUDIO</div><h1>내 글의 방향을 정해요</h1><p>설정 없이도 Skill은 바로 글을 만듭니다. 여기서는 앞으로 사용할 표현 방식만 다듬습니다.</p></div>
+      <section class="card"><div class="section-head"><div><span class="eyebrow">01 / STARTING POINT</span><h2>프리셋</h2></div><p>목적에 가까운 스타일을 고르세요.</p></div><div id="presets" class="preset-grid"></div></section>
+      <section class="card"><div class="section-head"><div><span class="eyebrow">02 / YOUR VOICE</span><h2>표현 방식</h2></div><p>각 항목은 따로 조정할 수 있습니다.</p></div><div id="fields" class="fields"></div></section>
+      <section class="card"><div class="section-head"><div><span class="eyebrow">03 / ADVANCED</span><h2>생성 옵션</h2></div></div><div class="scope-row"><label for="profile-scope">설정 적용 범위</label><select id="profile-scope"><option value="user">모든 프로젝트</option><option value="workspace">현재 프로젝트만</option></select></div><label class="toggle-row"><span><strong>생성 전에 주제 선택하기</strong><small>끄면 Skill이 가장 적절한 주제를 골라 바로 초안을 만듭니다.</small></span><input type="checkbox" id="topic-choice"><span class="switch"></span></label><div class="threshold"><label for="threshold">스타일 설정 제안 기준</label><div><input id="threshold" type="number" min="1" max="20"><span>회 반복 수정</span><button id="save-threshold" class="small-button">적용</button></div></div></section>
+      <section class="card"><div class="section-head"><div><span class="eyebrow">04 / REFERENCES</span><h2>참고 스타일</h2></div><p>이미지·HTML·텍스트에서 표현 특성을 추론합니다.</p></div><label class="upload"><input id="reference-file" type="file" accept="image/png,image/jpeg,image/webp,text/plain,text/html,.txt,.html"><span class="upload-icon">＋</span><strong>레퍼런스 추가</strong><small>파일을 선택하면 분석 결과를 검토할 수 있습니다. 최대 5 MB</small></label><div id="references" class="references"></div></section>
+      <p class="footnote">콘텐츠 제작은 Codex CLI의 <strong>$postgen</strong> Skill에서 진행합니다. 이 화면은 설정만 변경합니다.</p>
+    </section>
+    <aside class="assistant-panel"><div class="assistant-head"><div class="spark">✦</div><div><strong>글쓰기 설정 요청</strong><small>설정 변경 채팅</small></div></div><div id="chat-log" class="chat-log"><div class="bubble assistant">바꾸고 싶은 글쓰기 설정을 말해 주세요. 예: “문단 길이를 짧게 설정해 줘.”</div></div><form id="chat-form" class="chat-form"><textarea id="chat-input" rows="3" maxlength="2000" aria-label="글쓰기 설정 변경 요청" aria-describedby="chat-guidance" placeholder="바꾸고 싶은 글쓰기 설정을 입력하세요"></textarea><button type="submit" id="send-button">전송 <span>↗</span></button></form><p id="chat-guidance" class="assistant-note">이 채팅은 글쓰기 설정만 변경합니다. 초안 생성은 Codex CLI에서 <strong>$postgen</strong>을 실행하세요. 채팅의 변경 요청은 검증된 설정 명령으로만 적용됩니다.</p></aside>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

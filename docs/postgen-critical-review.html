@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Postgen 비판적 검토</title>
+  <style>
+    :root{color-scheme:light;--ink:#18252b;--muted:#50626a;--line:#d6e0e1;--paper:#f4f7f4;--white:#fff;--accent:#095f58;--high:#9a3725;--medium:#856000;--unknown:#536285}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}a{color:var(--accent);text-underline-offset:3px}a:hover{text-decoration-thickness:2px}:focus-visible{outline:3px solid #e59528;outline-offset:3px}header,main,footer{max-width:1120px;margin:auto;padding:0 24px}header{padding-top:54px;padding-bottom:34px}h1{font-size:clamp(2rem,5vw,3.8rem);line-height:1.14;letter-spacing:-.04em;margin:12px 0 18px}h2{font-size:1.5rem;line-height:1.3;margin:0 0 12px}h3{font-size:1.12rem;line-height:1.4;margin:0}.eyebrow{color:var(--accent);font-size:.78rem;font-weight:800;letter-spacing:.13em;text-transform:uppercase}.lead{max-width:770px;font-size:1.18rem;color:#33464d;margin:0}.stamp{display:inline-block;border:1px solid var(--line);border-radius:99px;padding:5px 11px;color:var(--muted);font-size:.85rem;margin-top:22px}main{padding-bottom:44px}.panel{background:var(--white);border:1px solid var(--line);border-radius:16px;padding:24px;margin-bottom:20px;box-shadow:0 4px 18px #16363208}.summary{border-left:5px solid var(--accent)}p{margin:9px 0 0}.note{color:var(--muted);font-size:.93rem}.levels{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}.level{border:1px solid var(--line);border-radius:12px;padding:15px;background:#f9fbfa}.level strong{display:block}.level small{display:block;color:var(--muted);line-height:1.5;margin-top:4px}.toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:14px;margin:22px 0 12px}.filters{display:flex;flex-wrap:wrap;gap:8px}.filters button{font:inherit;font-weight:700;border:1px solid #a5b9b8;background:white;color:var(--ink);border-radius:99px;padding:8px 17px;cursor:pointer}.filters button:hover{border-color:var(--accent)}.filters button[aria-pressed="true"]{background:var(--accent);color:white;border-color:var(--accent)}#count{font-weight:700;color:var(--muted)}.finding{background:white;border:1px solid var(--line);border-radius:14px;margin:10px 0;overflow:hidden}.finding[hidden]{display:none}.finding summary{list-style:none;cursor:pointer;padding:18px 20px;display:flex;align-items:flex-start;gap:13px}.finding summary::-webkit-details-marker{display:none}.finding summary::after{content:"＋";font-size:1.3rem;line-height:1;margin-left:auto;color:var(--accent)}.finding[open] summary::after{content:"−"}.finding summary:hover{background:#f7faf8}.finding .title{flex:1}.finding .title small{display:block;color:var(--muted);font-size:.86rem;margin-top:3px}.badge{flex:none;border-radius:6px;padding:2px 7px;font-size:.78rem;font-weight:800;line-height:1.5}.high{background:#f9e8e3;color:var(--high)}.medium{background:#fff2ca;color:var(--medium)}.unknown{background:#e9edf7;color:var(--unknown)}.detail-body{border-top:1px solid var(--line);padding:5px 20px 20px 20px}.detail-body dl{display:grid;grid-template-columns:92px 1fr;gap:11px 14px;margin:16px 0 0}.detail-body dt{font-weight:800;color:var(--muted)}.detail-body dd{margin:0}.detail-body ul{margin:0;padding-left:20px}.detail-body li+li{margin-top:5px}.table-scroll{overflow-x:auto;margin-top:16px}table{border-collapse:collapse;width:100%;min-width:580px;text-align:left}th,td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{background:#e9f1ed;color:#23443f}footer{border-top:1px solid var(--line);padding-top:24px;padding-bottom:42px;color:var(--muted);font-size:.92rem}@media(max-width:650px){header,main,footer{padding-left:16px;padding-right:16px}header{padding-top:32px}.panel{padding:18px}.levels{grid-template-columns:1fr}.finding summary{padding:15px;gap:9px}.detail-body{padding:4px 15px 17px}.detail-body dl{grid-template-columns:1fr;gap:2px}.detail-body dd{margin-bottom:10px}.toolbar{align-items:flex-start}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="eyebrow">Product review / Postgen MVP</div>
+    <h1>작동하는 초안 생성기,<br>검증이 필요한 글쓰기 경험</h1>
+    <p class="lead">Postgen의 사용법, 설정 화면, 근거 처리, 글 품질을 저장소의 문서와 구현으로 대조한 비판적 검토입니다. 발견 사항을 우선순위별로 살피고 근거를 직접 열 수 있습니다.</p>
+    <span class="stamp">검토 기준: 저장소 문서·소스 및 2026-10-24까지 기록된 검증</span>
+  </header>
+  <main>
+    <section class="panel summary" aria-labelledby="verdict">
+      <h2 id="verdict">종합 판단</h2>
+      <p><strong>기본 호출 경로는 문서화되어 있고 실행도 확인되었습니다.</strong> <a href="../README.md">README</a>는 프로젝트 폴더에서 <code>$postgen</code>을 호출하고 CLI에서 초안을 검토하는 순서를 제시합니다. <a href="sdd/00-environment.md">환경·검증 기록</a>에는 Skill 호출, 기본 생성, 자동 테스트 통과가 남아 있습니다.</p>
+      <p>첫 설치 방법은 빠져 있고, 설명의 오탈자와 설정 화면의 용어가 첫 사용자의 이해를 방해할 수 있습니다. 출처 참조의 형식을 검사하는 코드와 실제 주장에 맞는 근거를 확인하는 사람의 판단 사이에도 간격이 있습니다.</p>
+      <p><strong>실제 블로그 글의 게시 가능성·사실 오류율은 평가하지 않았습니다.</strong> 이 보고서는 글 품질 점수나 합격률을 만들지 않습니다.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="evidence-levels">
+      <h2 id="evidence-levels">증거를 읽는 방법</h2>
+      <div class="levels">
+        <div class="level"><strong>구현 확인</strong><small>README·Skill 안내와 실제 소스의 동작 또는 누락을 직접 대조했습니다.</small></div>
+        <div class="level"><strong>자동·설치 검증 기록</strong><small>환경 문서에 적힌 실행·합성 테스트 결과입니다. 이번 보고서가 그 시험을 재현했다는 뜻은 아닙니다.</small></div>
+        <div class="level"><strong>미검증·사람 평가 필요</strong><small>실제 기록과 독자를 대상으로 한 글 품질·성능 측정은 아직 없습니다.</small></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="findings-title">
+      <h2 id="findings-title">발견 사항</h2>
+      <p class="note">각 항목을 열면 영향, 개선 방향, 저장소 근거가 나옵니다. 우선순위는 개선 순서를 위한 판단이며 품질 점수가 아닙니다.</p>
+      <div class="toolbar">
+        <div class="filters" role="group" aria-label="발견 사항 우선순위 필터">
+          <button type="button" data-filter="all" aria-pressed="true">전체</button>
+          <button type="button" data-filter="high" aria-pressed="false">높음</button>
+          <button type="button" data-filter="medium" aria-pressed="false">중간</button>
+          <button type="button" data-filter="unknown" aria-pressed="false">미검증</button>
+        </div>
+        <span id="count" role="status" aria-live="polite">전체 7건 표시</span>
+      </div>
+
+      <details class="finding" data-priority="high">
+        <summary><span class="badge high">높음</span><span class="title"><h3>01. 첫 설치부터 호출까지 이어지는 안내가 없다</h3><small>사용법 · 구현 확인</small></span></summary>
+        <div class="detail-body"><dl>
+          <dt>관찰</dt><dd>README는 Codex CLI에서 <code>$postgen</code>을 부르는 방법을 설명하지만 Skill 설치 명령이나 설치 위치를 단계별로 안내하지 않습니다. 설정 서버 설명도 “설치된 postgen Skill 경로”를 전제합니다. Skill 문서는 호출 후 내부 절차를 자세히 다룹니다.</dd>
+          <dt>영향</dt><dd>처음 접한 사용자는 호출 전에 무엇을 설치해야 하는지, 설치가 성공했는지 판단하기 어렵습니다.</dd>
+          <dt>개선 방향</dt><dd>지원하는 설치 경로와 확인 절차, 최소 실행 예시를 README 맨 앞에 연결합니다. 설정 화면 실행은 선택 단계임을 같은 흐름에서 설명합니다.</dd>
+          <dt>근거</dt><dd><a href="../README.md">README 사용·설정 안내</a> · <a href="../skill/postgen/SKILL.md">Skill 진입점</a></dd>
+        </dl></div>
+      </details>
+
+      <details class="finding" data-priority="high">
+        <summary><span class="badge high">높음</span><span class="title"><h3>02. Knowledge 검증은 근거의 존재와 형식까지만 확인한다</h3><small>글 품질 · 구현 확인</small></span></summary>
+        <div class="detail-body"><dl>
+          <dt>관찰</dt><dd><code>validateKnowledge</code>는 Fact·Decision에 출처 참조가 있는지, <code>sourceId</code>가 목록에 있는지, 줄 번호가 양의 정수인지 확인합니다. 해당 줄이 실제 주장과 일치하는지, 출처의 신뢰도가 충분한지, 충돌하는 내용이 해결됐는지는 이 함수에서 검사하지 않습니다.</dd>
+          <dt>영향</dt><dd>검증기 통과를 사실 정확성 보증으로 읽으면 잘못된 확신을 줄 수 있습니다. 설치 검증에서 검증기 호출이 확인된 사실과도 구별해야 합니다.</dd>
+          <dt>개선 방향</dt><dd>검증 결과를 “구조 검증”으로 표시하고, 중요한 주장에 대해 사람의 출처 대조와 상충 기록 검토를 별도 품질 단계로 둡니다.</dd>
+          <dt>근거</dt><dd><a href="../skill/postgen/scripts/knowledge.mjs">Knowledge 검증 코드</a> · <a href="../skill/postgen/SKILL.md">Skill의 근거 지침</a> · <a href="sdd/00-environment.md">설치 검증 기록</a></dd>
+        </dl></div>
+      </details>
+
+      <details class="finding" data-priority="medium">
+        <summary><span class="badge medium">중간</span><span class="title"><h3>03. README 오탈자가 첫 실행 안내를 흐린다</h3><small>사용법 · 구현 확인</small></span></summary>
+        <div class="detail-body"><dl>
+          <dt>관찰</dt><dd>사용법 목록 직후에 단독 숫자 <code>2</code>가 있고, 다음 문장에는 <code>먼저1 텍스트 파일</code>이라고 적혀 있습니다.</dd>
+          <dt>영향</dt><dd>별도 단계나 각주처럼 오해할 수 있고, 로그를 파일로 저장해야 하는 조건이 덜 명료해집니다.</dd>
+          <dt>개선 방향</dt><dd>두 문자를 정리하고, 일반 CLI 출력과 문서는 명시적 파일 입력이 필요하다는 문장을 예시 명령과 함께 배치합니다.</dd>
+          <dt>근거</dt><dd><a href="../README.md">README 사용 절</a> · <a href="../skill/postgen/SKILL.md">명시적 입력 절차</a></dd>
+        </dl></div>
+      </details>
+
+      <details class="finding" data-priority="medium">
+        <summary><span class="badge medium">중간</span><span class="title"><h3>04. 설정 화면의 글쓰기 표현이 실제 기능 범위를 흐린다</h3><small>사용성 · 구현 확인</small></span></summary>
+        <div class="detail-body"><dl>
+          <dt>관찰</dt><dd>화면은 “내 글의 방향을 정해요”, “어떤 글을 쓰고 싶나요?”, “Codex 연결 채팅”이라고 안내합니다. 하단에는 이 화면은 설정만 변경한다고 적혀 있지만, 채팅 입력부 가까이에는 글 생성이 CLI의 Skill에서 진행된다는 설명이 없습니다. 앱 코드는 채팅을 <code>/api/chat</code>으로 보내 Profile을 다시 그립니다.</dd>
+          <dt>영향</dt><dd>사용자가 설정 채팅에서 글 자체가 만들어질 것으로 기대하거나 모델 전달 범위를 놓칠 수 있습니다.</dd>
+          <dt>개선 방향</dt><dd>입력부를 “글쓰기 설정 요청”으로 명명하고, 옆에 “초안 생성: Codex CLI에서 $postgen”을 배치합니다. 모델 전달 안내도 파일 선택·채팅 위치에 가깝게 둡니다.</dd>
+          <dt>근거</dt><dd><a href="../skill/postgen/web/index.html">설정 화면 문구</a> · <a href="../skill/postgen/web/app.js">채팅 처리 코드</a> · <a href="../README.md">모델 전달 안내</a></dd>
+        </dl></div>
+      </details>
+
+      <details class="finding" data-priority="medium">
+        <summary><span class="badge medium">중간</span><span class="title"><h3>05. 후보 탐색은 대형 기록에서 비용이 커질 수 있다</h3><small>수집 성능 · 코드 기반 우려</small></span></summary>
+        <div class="detail-body"><dl>
+          <dt>관찰</dt><dd>36,000자 예산은 선택한 출처를 읽을 때 적용됩니다. 후보 탐색에서는 로컬 JSONL을 재귀적으로 훑고 각 파일을 읽어 파싱하며, 검색어 관련도를 계산할 때 메시지 본문을 합쳐 검사합니다. 후보 목록의 출력은 짧지만 탐색 자체가 본문을 처리합니다.</dd>
+          <dt>영향</dt><dd>기록이 많거나 큰 환경에서는 첫 응답 시간이 길어질 가능성이 있습니다. 실제 지연이나 메모리 사용량은 측정되지 않았습니다.</dd>
+          <dt>개선 방향</dt><dd>여러 크기의 합성 기록으로 후보 탐색 시간·메모리를 측정하고, 필요하면 메타데이터 인덱스나 단계적 읽기를 검토합니다.</dd>
+          <dt>근거</dt><dd><a href="../skill/postgen/scripts/collect.mjs">후보 정렬과 읽기 예산</a> · <a href="../skill/postgen/scripts/source-providers.mjs">JSONL 탐색·파싱</a> · <a href="sdd/00-environment.md">36,000자 한도와 남은 측정</a></dd>
+        </dl></div>
+      </details>
+
+      <details class="finding" data-priority="unknown">
+        <summary><span class="badge unknown">미검증</span><span class="title"><h3>06. 실제 블로그 글의 게시 가능성과 사실 오류율</h3><small>글 품질 · 사람 평가 필요</small></span></summary>
+        <div class="detail-body"><dl>
+          <dt>관찰</dt><dd>문서에는 기본 생성 시 제목과 근거 확인 항목이 나온 사실, 자동 테스트 통과가 기록되어 있습니다. 실제 사용자 기록으로 여러 주제와 독자 수준을 평가한 파일럿은 수행되지 않았습니다.</dd>
+          <dt>영향</dt><dd>독자의 이해도, 게시 전 수정량, 사실 오류율을 현재 증거로 판단할 수 없습니다.</dd>
+          <dt>개선 방향</dt><dd>서로 다른 기록 밀도와 독자 수준을 가진 초안을 사람 평가자가 읽고, 출처 대조·수정 횟수·첫 초안 시간을 기록합니다. 평가 전에는 수치나 품질 점수를 제시하지 않습니다.</dd>
+          <dt>근거</dt><dd><a href="sdd/00-environment.md">남은 품질 검증</a> · <a href="sdd/11-acceptance-criteria.md">파일럿 품질 기준</a> · <a href="sdd/12-test-strategy.md">수용 테스트 계획</a></dd>
+        </dl></div>
+      </details>
+
+      <details class="finding" data-priority="unknown">
+        <summary><span class="badge unknown">미검증</span><span class="title"><h3>07. 혼합 프로젝트와 기록 형식 변화에서의 품질</h3><small>입력 신뢰성 · 추가 검증 필요</small></span></summary>
+        <div class="detail-body"><dl>
+          <dt>관찰</dt><dd>Codex·Claude Code 합성 세션과 명시 로그의 수집 시험은 기록되어 있습니다. 현재 프로젝트의 실제 후보 3건은 모두 Codex 기록이었고, 실제 혼합 프로젝트에서 글을 만드는 시험은 없습니다. JSONL 형식도 버전마다 달라질 수 있습니다.</dd>
+          <dt>영향</dt><dd>실제 혼합 기록에서 주제 선택과 출처 누락이 어느 정도 발생하는지 알 수 없습니다.</dd>
+          <dt>개선 방향</dt><dd>버전별·부분 손상·대형 기록 회귀 시험과 실제 혼합 프로젝트 파일럿을 분리해 수행하고, 누락 출처를 사람이 확인합니다.</dd>
+          <dt>근거</dt><dd><a href="sdd/00-environment.md">입력 제공자 보강·한계</a> · <a href="../skill/postgen/scripts/source-providers.mjs">입력 제공자 구현</a> · <a href="sdd/12-test-strategy.md">실패 주입 사례</a></dd>
+        </dl></div>
+      </details>
+    </section>
+
+    <section class="panel" aria-labelledby="next-title" style="margin-top:26px">
+      <h2 id="next-title">검토에서 확인된 것과 다음 확인</h2>
+      <div class="table-scroll"><table>
+        <thead><tr><th scope="col">영역</th><th scope="col">현재 증거</th><th scope="col">다음 확인</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">호출·생성</th><td>설치본 호출과 기본 초안 생성, 자동 테스트 통과 기록</td><td>처음 쓰는 사람의 설치·호출 흐름 관찰</td></tr>
+          <tr><th scope="row">근거 처리</th><td>출처 참조 형식 검증 코드와 합성 테스트</td><td>실제 주장과 원문 줄의 일치 여부 평가</td></tr>
+          <tr><th scope="row">글 품질</th><td>제목·근거 확인 항목 출력 사례</td><td>게시 가능성·사실 오류율·수정량 파일럿</td></tr>
+          <tr><th scope="row">수집 성능</th><td>36,000자 선택 읽기 확인</td><td>대형 기록 탐색 시간·메모리 측정</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+  </main>
+  <footer>이 보고서는 로컬 HTML 한 파일입니다. 근거 링크는 이 파일의 위치인 <code>docs/</code>를 기준으로 저장소 파일을 엽니다.</footer>
+  <script>
+    (() => {
+      const buttons = [...document.querySelectorAll('[data-filter]')];
+      const findings = [...document.querySelectorAll('.finding[data-priority]')];
+      const count = document.getElementById('count');
+      const labels = {all:'전체',high:'높음',medium:'중간',unknown:'미검증'};
+      function applyFilter(value) {
+        let visible = 0;
+        for (const item of findings) {
+          item.hidden = value !== 'all' && item.dataset.priority !== value;
+          if (!item.hidden) visible++;
+        }
+        for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.filter === value));
+        count.textContent = `${labels[value]} ${visible}건 표시`;
+      }
+      for (const button of buttons) button.addEventListener('click', () => applyFilter(button.dataset.filter));
+      applyFilter('all');
+    })();
+  </script>
+</body>
+</html>

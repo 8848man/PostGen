@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "summary": { "type": "string" },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "value": { "type": "string" }
+        },
+        "required": ["path", "value"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["summary", "suggestions"],
+  "additionalProperties": false
+}

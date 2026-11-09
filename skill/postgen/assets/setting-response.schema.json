@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "reply": { "type": "string" },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "operation": { "type": "string" },
+          "path": { "type": "string" },
+          "value": { "type": ["string", "boolean", "integer"] },
+          "reason": { "type": "string" }
+        },
+        "required": ["operation", "path", "value", "reason"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["reply", "commands"],
+  "additionalProperties": false
+}

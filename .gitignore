@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+.next/
+playwright-report/
+test-results/
+browser-profile/
+browser-profiles/

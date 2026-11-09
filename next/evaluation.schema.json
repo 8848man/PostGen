@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "ruleScores": { "type": "array", "items": { "type": "object", "properties": { "key": { "type": "string" }, "score": { "type": "integer" }, "reason": { "type": "string" } }, "required": ["key", "score", "reason"], "additionalProperties": false } },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["ruleScores", "warnings"],
+  "additionalProperties": false
+}
