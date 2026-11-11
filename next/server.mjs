@@ -121,7 +121,7 @@ const server = http.createServer(async (req, res) => {
       const sample = resolveAccount(registry, account.channel, account.handle).sample;
       const modelOptions = { provider: input.provider || job.model, model: input.model };
       const initialInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan };
-      const estimate = estimateTextRequest({ provider: modelOptions.provider, model: modelOptions.model, promptChars: draftPrompt(initialInput).length * 3, outputTokens: 12_000 });
+      const estimate = estimateTextRequest({ provider: modelOptions.provider, model: modelOptions.model, promptText: draftPrompt(initialInput), calls: 3, outputTokens: 12_000 });
       requireCostAcknowledgement(estimate, input.costAcknowledged === true);
       if (!job.plan) { const planned = await generatePlan(job.sources, modelOptions); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
       const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan };
@@ -139,7 +139,7 @@ const server = http.createServer(async (req, res) => {
       const account = loadRegistry().accounts.find(item => item.id === job.accountId);
       const sample = account ? resolveAccount(loadRegistry(), account.channel, account.handle).sample : null;
       if (!account) throw new Error('Unknown account');
-      return json(res, 200, { estimate: estimateTextRequest({ provider: input.provider || job.model, model: input.model, promptChars: draftPrompt({ sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan }).length * 3, outputTokens: 12_000 }) });
+      return json(res, 200, { estimate: estimateTextRequest({ provider: input.provider || job.model, model: input.model, promptChars: draftPrompt({ sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan }), calls: 3, outputTokens: 12_000 }) });
     }
     if (url.pathname === '/api/draft/lock') return json(res, 200, { lock: acquireDraftLock(input.jobId) });
     if (url.pathname === '/api/draft/unlock') return json(res, 200, { released: releaseDraftLock(input.jobId, input.token) });

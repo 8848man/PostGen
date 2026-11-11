@@ -2,7 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { estimateTextRequest, estimateImageRequest, requireCostAcknowledgement } from '../next/cost.mjs';
+import { approximateTokens, estimateTextRequest, estimateImageRequest, requireCostAcknowledgement } from '../next/cost.mjs';
+
+test('token approximation counts Korean characters individually', () => {
+  assert.equal(approximateTokens('abcdefgh'), 2);
+  assert.equal(approximateTokens('한국어 문장'), 5 + 1);
+  assert.equal(approximateTokens(''), 0);
+});
+
+test('text estimate multiplies approximated prompt tokens by call count', () => {
+  const dir = fs.mkdtempSync(path.join(path.resolve('tests'), '.postgen-price-'));
+  const previousTable = process.env.POSTGEN_PRICE_TABLE;
+  try {
+    process.env.POSTGEN_PRICE_TABLE = path.join(dir, 'prices.json');
+    fs.writeFileSync(process.env.POSTGEN_PRICE_TABLE, JSON.stringify({ 'anthropic:test-model': { inputPerMillion: 1, outputPerMillion: 10 } }));
+    const estimate = estimateTextRequest({ provider: 'anthropic', model: 'test-model', promptText: '가나다라abcd', calls: 3, outputTokens: 1000 });
+    assert.equal(estimate.known, true);
+    assert.equal(estimate.inputTokens, (4 + 1) * 3);
+    assert.ok(Math.abs(estimate.estimatedUsd - (15 * 1 + 1000 * 10) / 1_000_000) < 1e-12);
+    assert.match(estimate.basis, /3회/);
+    assert.throws(() => estimateTextRequest({ provider: 'anthropic', model: 'test-model', promptText: 'x', calls: 0 }), /call count/);
+  } finally {
+    if (previousTable === undefined) delete process.env.POSTGEN_PRICE_TABLE; else process.env.POSTGEN_PRICE_TABLE = previousTable;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('unknown model price requires confirmation before a paid request', () => {
   const estimate = estimateTextRequest({ provider: 'claude', promptChars: 1000 });
