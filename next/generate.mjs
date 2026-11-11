@@ -2,7 +2,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codexJson } from '../skill/postgen/scripts/codex-client.mjs';
+import { codexRun } from '../skill/postgen/scripts/codex-client.mjs';
+import { normalizeUsage, subscriptionFromClaude } from './usage.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const draftSchemaPath = path.join(root, 'draft.schema.json');
@@ -25,7 +26,7 @@ async function cliJson(binary, args, prompt, timeoutMs = 180_000) {
     child.stdout.on('data', part => { stdout += part; if (stdout.length > 2_000_000) child.kill(); });
     child.stderr.on('data', part => { stderr += part; if (stderr.length > 20_000) stderr = stderr.slice(-20_000); });
     child.on('error', error => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } });
-    child.on('close', code => { if (settled) return; settled = true; clearTimeout(timer); if (code) { let detail = stderr.slice(-600); try { detail = JSON.parse(stdout).result || detail; } catch { /* Some hosts only report errors on stderr. */ } reject(new Error(`Host failed (${code}): ${detail}`)); } else resolve(stdout); });
+    child.on('close', code => { if (settled) return; settled = true; clearTimeout(timer); if (code) { let detail = stderr.slice(-600); try { detail = JSON.parse(stdout.trim().split(/\r?\n/).at(-1)).result || detail; } catch { /* Some hosts only report errors on stderr. */ } reject(new Error(`Host failed (${code}): ${detail}`)); } else resolve(stdout); });
     child.stdin.end(prompt);
   });
 }
@@ -49,17 +50,26 @@ async function apiJson(provider, model, prompt, schema) {
   const text = provider === 'openai'
     ? data.output?.flatMap(item => item.content || []).filter(item => item.type === 'output_text').map(item => item.text).join('')
     : data.content?.filter(item => item.type === 'text').map(item => item.text).join('');
-  return { result: parseJson(text), usage: data.usage || null };
+  return { result: parseJson(text), usage: normalizeUsage(provider, data.usage) };
+}
+
+// Claude Code CLI의 stream-json 출력에서 최종 결과와 구독 한도(rate_limit_event)를 꺼낸다.
+export function parseClaudeStream(stdout) {
+  const events = String(stdout).split(/\r?\n/).filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+  const final = events.filter(event => event.type === 'result').at(-1);
+  if (!final) throw new Error('Claude returned no result');
+  if (final.is_error) throw new Error(`Claude failed: ${String(final.result || final.subtype).slice(0, 300)}`);
+  const rateLimit = events.filter(event => event.type === 'rate_limit_event').at(-1)?.rate_limit_info;
+  return { result: final.structured_output || parseJson(final.result), usage: normalizeUsage('claude', final.usage, subscriptionFromClaude(rateLimit)) };
 }
 
 export async function invokeModel(prompt, { provider = 'codex', model, outputSchemaPath = draftSchemaPath } = {}) {
   if (prompt.length > maxPrompt) throw new Error('Generation prompt too large');
   const schema = JSON.parse(fs.readFileSync(outputSchemaPath, 'utf8'));
-  if (provider === 'codex') return { result: await codexJson(prompt, outputSchemaPath), usage: null };
+  if (provider === 'codex') { const run = await codexRun(prompt, outputSchemaPath); return { result: run.result, usage: normalizeUsage('codex', run.usage) }; }
   if (provider === 'claude') {
-    const raw = await cliJson(claudeBinary(), ['-p','--output-format','json','--json-schema',JSON.stringify(schema),'--tools',''], prompt);
-    const parsed = JSON.parse(raw);
-    return { result: parsed.structured_output || parseJson(parsed.result), usage: parsed.usage || null };
+    const raw = await cliJson(claudeBinary(), ['-p','--output-format','stream-json','--verbose','--json-schema',JSON.stringify(schema),'--tools',''], prompt);
+    return parseClaudeStream(raw);
   }
   if (provider === 'openai' || provider === 'anthropic') return apiJson(provider, model, prompt, schema);
   throw new Error('Unknown model provider');

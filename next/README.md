@@ -16,6 +16,8 @@
 
 직접 API 호출은 `OPENAI_API_KEY` 또는 `ANTHROPIC_API_KEY` 환경 변수를 사용한다. 모델 이름은 생성 화면에서 지정한다. `POSTGEN_PRICE_TABLE`은 가격표 JSON 파일 경로이며 키는 `provider:model`, 값은 `inputPerMillion`, `outputPerMillion`이다. 입력 토큰은 CJK 문자 1자당 1토큰, 그 밖의 문자 4자당 1토큰으로 근사하고 계획·초안·평가 3회 호출분을 합산한다. `POSTGEN_COST_LIMIT_USD`로 요청별 한도를 지정할 수 있다. 이미지 가격표 키는 `image:openai:<model>:generation` 또는 `image:openai:<model>:edit`이며, 값에 확인한 이미지 1회 가격 `perImageUsd`, `verified: true`, 가격 출처 `sourceUrl`, 확인일 `verifiedAt`(YYYY-MM-DD)을 기록한다. 해당 항목이 없으면 이미지 비용은 추정 불가로 표시한다. 자동 이미지 점검 비용은 별도이며 총액에 포함되지 않는다. 가격표가 없으면 금액을 추정하지 않고 실행 전 확인한다. API 키를 PostGen JSON 파일에 저장하지 않는다.
 
+초안 생성이 끝나면 계획·초안·평가 호출의 실제 토큰 사용량을 화면에 표시한다. Claude Code로 생성하면 구독 한도의 5시간·7일 사용률도 함께 표시한다. Codex CLI는 한도 정보를 출력하지 않으므로 `확인 불가`로 표시하고, 직접 API 호출은 종량제라 한도 대상이 아니다. Windows에서 `codex.exe`가 PATH에 없으면 `POSTGEN_CODEX_BIN`에 실행 파일 경로를 지정한다.
+
 ## 미완료 검증
 
 2026-11-06 기준 Codex CLI 구조화 응답은 실호출 통과. Claude CLI는 상태 명령상 로그인으로 표시되지만 실호출 시 OAuth 세션 만료로 실패했다. OpenAI·Anthropic 직접 API 키가 없어 실호출은 미검증이다. Edge의 합성 편집기에서는 계정 확인·필드 입력·문단별 이미지 위치·읽기 확인을 통과했다. 로그인된 네이버·티스토리 화면에서 테스트 이미지가 첫 문단과 둘째 문단 사이에 업로드된 것을 확인하고 편집기 테스트 내용을 지웠다. 예약 설정 화면도 확인했으나 최종 등록은 하지 않았다. **PostGen 전용 Edge 프로필에서의 전체 입력, 플랫폼 예약 등록 완료, 공개 URL 확인은 미검증**이다. 해당 화면에서 검증하기 전에는 A~C 완료로 표시하지 않는다.

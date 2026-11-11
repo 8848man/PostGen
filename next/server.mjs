@@ -11,6 +11,7 @@ import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock
 import { generateDraft, generatePlan, draftPrompt } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { estimateTextRequest, estimateImageRequest, requireCostAcknowledgement } from './cost.mjs';
+import { summarizeUsage, describeUsage } from './usage.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, generateImage, checkImage } from './images.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
@@ -123,15 +124,18 @@ const server = http.createServer(async (req, res) => {
       const initialInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan };
       const estimate = estimateTextRequest({ provider: modelOptions.provider, model: modelOptions.model, promptText: draftPrompt(initialInput), calls: 3, outputTokens: 12_000 });
       requireCostAcknowledgement(estimate, input.costAcknowledged === true);
-      if (!job.plan) { const planned = await generatePlan(job.sources, modelOptions); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
+      const usageEntries = [];
+      if (!job.plan) { const planned = await generatePlan(job.sources, modelOptions); usageEntries.push({ step: 'plan', usage: planned.usage }); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
       const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan };
       const output = await generateDraft(generationInput, modelOptions);
+      usageEntries.push({ step: 'draft', usage: output.usage });
       let evaluation = null;
-      try { evaluation = (await evaluateDraft({ draft: output.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources }, modelOptions)).evaluation; }
-      catch (error) { output.diagnostics.push({ code: 'evaluation_unavailable', message: String(error.message).slice(0,200) }); }
+      try { const evaluated = await evaluateDraft({ draft: output.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources }, modelOptions); evaluation = evaluated.evaluation; usageEntries.push({ step: 'evaluation', usage: evaluated.usage }); }
+      catch (error) { usageEntries.push({ step: 'evaluation', usage: null }); output.diagnostics.push({ code: 'evaluation_unavailable', message: String(error.message).slice(0,200) }); }
       output.draft.evaluation = evaluation;
       const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics));
-      return json(res, 200, { state, usage: output.usage });
+      const usage = summarizeUsage(usageEntries);
+      return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
     }
     if (url.pathname === '/api/estimate') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
