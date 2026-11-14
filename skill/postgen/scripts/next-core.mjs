@@ -158,7 +158,7 @@ export function setCampaignPlan(state, campaignId, plan) {
 
 export function setDraft(state, id, draft, diagnostics = []) {
   return change(state, id, ['selected','draft'], job => {
-    job.draft = { title: draft.title, body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, revision: (job.draft?.revision || 0) + 1 };
+    job.draft = { title: draft.title, body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
     job.status = 'draft';

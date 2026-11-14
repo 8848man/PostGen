@@ -24,6 +24,8 @@ PostGen 자체 MCP 서버는 Host Adapter의 추가 진입점으로 검토한다
 
 생성은 Codex·Claude Code 구독의 호스트 모델을 사용한다. 직접 API 키를 PostGen에 설정하지 않는다. 이미지 기능도 호스트를 우선하며, 사용자가 호스트에서 만든 파일을 승인된 작업에 연결할 수 있어야 한다. UI 단독 생성은 후속 단계다. 호출 후 호스트가 제공한 사용량을 표시하고, 제공하지 않은 값은 추정하지 않는다.
 
+사용자의 Assets Manager 표준(N-015, `next/assets-standard.mjs`)을 설정하면(`POSTGEN_ASSETS_CLI`) 초안 생성마다 채널 세트를 라이브러리 명령줄로 받아 초안 프롬프트의 기본 규칙, 평가의 자가 점검 항목(`standardChecks`), 이미지 자리마다의 ImageGen 요청서(`/api/images/request`: 표준의 요청서 형식 + 원본 참조 경로)에 쓴다. 초안은 사용한 세트와 지침 sha256을 `draft.standard`로 남긴다.
+
 ## 구현 순서와 기존 코드
 
 기존 `skill/postgen/scripts/profile.mjs`의 Style Profile은 이전 MVP의 지속 설정이다. 계정별 골든 샘플은 별도 레지스트리에 두며 이전 프로필을 묵시적으로 마이그레이션하지 않는다. 작업 상태 Core는 설치된 Skill 안의 `scripts/next-core.mjs`를 단일 구현으로 사용하고 로컬 화면 서버가 이를 재사용한다. `scripts/next-cli.mjs`가 호스트 대화의 작업 진입점이다. 기존 `$postgen` 기본 글쓰기 흐름은 유지한다. 화면과 대화의 동시 쓰기는 revision 충돌로 막으며 편집 중 잠금은 후속 구현이다.

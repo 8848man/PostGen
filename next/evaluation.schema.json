@@ -2,8 +2,9 @@
   "type": "object",
   "properties": {
     "ruleScores": { "type": "array", "items": { "type": "object", "properties": { "key": { "type": "string" }, "score": { "type": "integer" }, "reason": { "type": "string" } }, "required": ["key", "score", "reason"], "additionalProperties": false } },
-    "warnings": { "type": "array", "items": { "type": "string" } }
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "standardChecks": { "type": "array", "items": { "type": "object", "properties": { "item": { "type": "string" }, "passed": { "type": "boolean" }, "reason": { "type": "string" } }, "required": ["item", "passed", "reason"], "additionalProperties": false } }
   },
-  "required": ["ruleScores", "warnings"],
+  "required": ["ruleScores", "warnings", "standardChecks"],
   "additionalProperties": false
 }
