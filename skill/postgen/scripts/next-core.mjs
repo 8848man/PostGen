@@ -19,7 +19,7 @@ export function validateState(state) {
   for (const job of state.jobs) {
     if (!nonempty(job.id, 80) || ids.has(job.id) || !nonempty(job.accountId, 80) || !nonempty(job.audience, 500) || !Array.isArray(job.sources) || !job.sources.length || !['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired','cancelled','failed','unknown'].includes(job.status)) throw new Error('Invalid job');
     if (job.sources.some(source => !nonempty(source.id, 80) || !nonempty(source.type, 40) || !nonempty(source.ref, 2048) || !(source.expired === true ? source.text === null : nonempty(source.text, 120_000)))) throw new Error('Invalid source snapshot');
-    if (job.draft && (!nonempty(job.draft.title, 300) || !nonempty(job.draft.body) || !Array.isArray(job.draft.claims) || !Array.isArray(job.draft.images))) throw new Error('Invalid draft');
+    if (job.draft && (!nonempty(job.draft.title, 300) || !nonempty(job.draft.body) || !Array.isArray(job.draft.claims) || !Array.isArray(job.draft.images) || (job.draft.headings !== undefined && (!Array.isArray(job.draft.headings) || job.draft.headings.some(heading => !nonempty(heading, 300)))))) throw new Error('Invalid draft');
     if (['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired'].includes(job.status) && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
     if (['scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) && (!iso(job.schedule?.at) || !iso(job.schedule?.expiresAt))) throw new Error('Scheduled job needs a time');
     if ((['registered','verification_due'].includes(job.status) || job.status === 'published' && job.registration) && job.schedule && (!job.registration?.verified || job.registration.publishAt !== job.schedule.at || job.registration.accountHandle !== job.accountHandle)) throw new Error('Platform reservation must be verified');
@@ -158,7 +158,7 @@ export function setCampaignPlan(state, campaignId, plan) {
 
 export function setDraft(state, id, draft, diagnostics = []) {
   return change(state, id, ['selected','draft'], job => {
-    job.draft = { title: draft.title, body: draft.body, claims: draft.claims || [], images: draft.images || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, revision: (job.draft?.revision || 0) + 1 };
+    job.draft = { title: draft.title, body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
     job.status = 'draft';
@@ -170,6 +170,8 @@ export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
     if (!job.draft) throw new Error('Missing draft');
     const imageIds = new Set();
     for (const image of job.draft.images) { if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and paragraph positions'); imageIds.add(image.id); }
+    const bodyLines = job.draft.body.split('\n').map(line => line.trim());
+    for (const heading of job.draft.headings || []) if (bodyLines.filter(line => line === heading).length !== 1) throw new Error('Each heading must match one unique body line');
     if (job.draft.images.length && (!job.draft.imagePlanApproved || job.draft.images.some(image => !image.generatedPath || (image.check?.passed === false && !image.check.manualAccepted)))) throw new Error('Generate images and review failed image checks before approval');
     if (job.diagnostics.some(item => item.code === 'source_conflict') && !conflictAcknowledged) throw new Error('Source conflict needs explicit acknowledgement');
     job.approval = { at: new Date().toISOString(), draftRevision: job.draft.revision, conflictAcknowledged };
@@ -285,7 +287,7 @@ export function recordPublication(state, id, { postUrl, finalTitle, finalBody, s
     job.status = 'published';
   });
 }
-export function cancelJob(state, id) { return change(state, id, ['selected','draft','approved','scheduled','due','preparing','review_required','expired'], job => { job.status = 'cancelled'; }); }
+export function cancelJob(state, id) { return change(state, id, ['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','expired'], job => { job.status = 'cancelled'; }); }
 
 export function pruneOldSources(state, months = 3, now = new Date()) {
   if (!Number.isInteger(months) || months < 1 || months > 3) throw new Error('Retention must be 1–3 months');

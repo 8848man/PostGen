@@ -30,29 +30,6 @@ async function cliJson(binary, args, prompt, timeoutMs = 180_000) {
     child.stdin.end(prompt);
   });
 }
-async function apiJson(provider, model, prompt, schema) {
-  if (!model || typeof model !== 'string') throw new Error('Direct model name required');
-  let url, headers, body;
-  if (provider === 'openai') {
-    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is not configured');
-    url = 'https://api.openai.com/v1/responses';
-    headers = { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' };
-    body = { model, input: prompt, text: { format: { type: 'json_schema', name: 'postgen_draft', schema, strict: true } } };
-  } else {
-    if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY is not configured');
-    url = 'https://api.anthropic.com/v1/messages';
-    headers = { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' };
-    body = { model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] };
-  }
-  const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(180_000) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(`${provider} API failed (${response.status}): ${JSON.stringify(data.error || {}).slice(0,300)}`);
-  const text = provider === 'openai'
-    ? data.output?.flatMap(item => item.content || []).filter(item => item.type === 'output_text').map(item => item.text).join('')
-    : data.content?.filter(item => item.type === 'text').map(item => item.text).join('');
-  return { result: parseJson(text), usage: normalizeUsage(provider, data.usage) };
-}
-
 // Claude Code CLI의 stream-json 출력에서 최종 결과와 구독 한도(rate_limit_event)를 꺼낸다.
 export function parseClaudeStream(stdout) {
   const events = String(stdout).split(/\r?\n/).filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
@@ -63,7 +40,7 @@ export function parseClaudeStream(stdout) {
   return { result: final.structured_output || parseJson(final.result), usage: normalizeUsage('claude', final.usage, subscriptionFromClaude(rateLimit)) };
 }
 
-export async function invokeModel(prompt, { provider = 'codex', model, outputSchemaPath = draftSchemaPath } = {}) {
+export async function invokeModel(prompt, { provider = 'codex', outputSchemaPath = draftSchemaPath } = {}) {
   if (prompt.length > maxPrompt) throw new Error('Generation prompt too large');
   const schema = JSON.parse(fs.readFileSync(outputSchemaPath, 'utf8'));
   if (provider === 'codex') { const run = await codexRun(prompt, outputSchemaPath); return { result: run.result, usage: normalizeUsage('codex', run.usage) }; }
@@ -71,7 +48,6 @@ export async function invokeModel(prompt, { provider = 'codex', model, outputSch
     const raw = await cliJson(claudeBinary(), ['-p','--output-format','stream-json','--verbose','--json-schema',JSON.stringify(schema),'--tools',''], prompt);
     return parseClaudeStream(raw);
   }
-  if (provider === 'openai' || provider === 'anthropic') return apiJson(provider, model, prompt, schema);
   throw new Error('Unknown model provider');
 }
 

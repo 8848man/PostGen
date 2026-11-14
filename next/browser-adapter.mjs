@@ -5,11 +5,54 @@ import { chromium } from 'playwright-core';
 import { dataDir } from '../skill/postgen/scripts/profile.mjs';
 
 const sessions = new Map();
+let attachedEdge = null;
 const profileRoot = () => path.join(process.env.POSTGEN_NEXT_DIR || path.join(dataDir(), 'next'), 'browser-profiles');
 const channels = {
   naver: hostname => hostname === 'blog.naver.com' || hostname.endsWith('.blog.naver.com'),
   tistory: hostname => hostname === 'tistory.com' || hostname.endsWith('.tistory.com')
 };
+export function edgeCdpEndpoint(value) {
+  if (value === 'msedge') return value;
+  let url;
+  try { url = new URL(value); } catch { throw new Error('Edge CDP endpoint must be msedge or a loopback HTTP URL'); }
+  const port = Number(url.port);
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) || !Number.isInteger(port) || port < 1 || port > 65535 || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error('Edge CDP endpoint must use a local HTTP port');
+  return url.origin;
+}
+export async function connectExistingEdge(value, connect = (endpoint, options) => chromium.connectOverCDP(endpoint, options), readVersion = async endpoint => {
+  const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error('Edge debugging endpoint is unavailable');
+  return response.json();
+}) {
+  const endpoint = edgeCdpEndpoint(value);
+  if (endpoint !== 'msedge') {
+    const version = await readVersion(endpoint);
+    if (typeof version?.Browser !== 'string' || !version.Browser.startsWith('Edg/')) throw new Error('The local debugging endpoint is not Microsoft Edge');
+  }
+  const browser = await connect(endpoint, { timeout: endpoint === 'msedge' ? 60000 : 10000, noDefaults: true, isLocal: true });
+  const context = browser.contexts()[0];
+  if (!context) throw new Error('The connected Edge browser has no default profile');
+  return { browser, context };
+}
+// Reuse a connection the caller already holds so Edge does not ask for debugging approval again.
+export function adoptExistingEdge(connection) {
+  if (!connection?.browser?.isConnected() || !connection.context) throw new Error('Edge connection is not active');
+  attachedEdge = connection;
+}
+async function sharedExistingEdge(endpoint) {
+  if (attachedEdge?.browser.isConnected()) return attachedEdge;
+  attachedEdge = await connectExistingEdge(endpoint);
+  return attachedEdge;
+}
+async function waitForNaverEditor(page, handle, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frame = page.frames().find(item => item.name() === 'mainFrame');
+    if (frame && new URL(frame.url()).searchParams.get('blogId') === handle) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+}
 function unique(page, selector, label) {
   if (typeof selector !== 'string' || !selector.trim() || selector.length > 300) throw new Error(`Missing ${label} selector`);
   return page.locator(selector);
@@ -77,6 +120,13 @@ export async function fillNativeEditorPage(page, job) {
     if (!frameInfo || new URL(frameInfo.url()).searchParams.get('blogId') !== job.accountHandle) throw new Error('Naver editor account mismatch');
     const frame = page.frameLocator('iframe#mainFrame');
     const titleArea = frame.locator('.se-title-text .se-text-paragraph');
+    await titleArea.waitFor({ state: 'visible', timeout: 30_000 });
+    // Naver offers to resume an autosaved draft; decline so input always starts from a blank editor.
+    const resumePrompt = frame.locator('.se-popup-alert-confirm').filter({ hasText: '작성 중인 글이 있습니다' });
+    if (await resumePrompt.isVisible().catch(() => false)) {
+      await resumePrompt.locator('.se-popup-button-cancel').click();
+      await resumePrompt.waitFor({ state: 'hidden', timeout: 5000 });
+    }
     if (await titleArea.count() !== 1) throw new Error('Naver title field unavailable');
     const existingTitle = await readNaverTitle(page);
     const existingBody = await readNaverBody(page);
@@ -86,13 +136,26 @@ export async function fillNativeEditorPage(page, job) {
     await page.keyboard.insertText(job.draft.title);
     const bodyArea = frame.locator('.se-component[data-a11y-title="본문"] .se-text-paragraph').first();
     await bodyArea.click();
-    for (const [index, line] of job.draft.body.split('\n').entries()) { if (index) await page.keyboard.press('Enter'); if (line) await page.keyboard.insertText(line); }
+    const bodyParagraphs = frame.locator('.se-component[data-a11y-title="본문"] .se-text-paragraph');
+    for (const [index, line] of job.draft.body.split('\n').entries()) {
+      if (index) {
+        await page.keyboard.press('Enter');
+        // The editor occasionally drops an Enter while typing long bodies; re-press until the paragraph exists.
+        for (let attempt = 0; attempt < 3 && await bodyParagraphs.count() < index + 1; attempt++) {
+          await page.waitForTimeout(200);
+          if (await bodyParagraphs.count() < index + 1) await page.keyboard.press('Enter');
+        }
+      }
+      if (line) await page.keyboard.insertText(line);
+    }
+    if (job.draft.headings?.length) await formatNaverHeadings(page, job.draft.headings);
     const title = await readNaverTitle(page);
     const body = await readNaverBody(page);
     if (title !== job.draft.title.trim() || body !== job.draft.body.trim()) throw new Error('Naver editor readback differs');
     const uploadedImages = await uploadNaverImages(page, job.draft.images);
     const afterUpload = await readNaverBody(page);
-    if (afterUpload !== body) throw new Error('Naver body changed during image upload');
+    if (naverTextLines(afterUpload) !== naverTextLines(body)) throw new Error('Naver text changed during image upload');
+    if (job.draft.headings?.length) await verifyNaverHeadings(page, job.draft.headings);
     return { editorUrl: frameInfo.url(), visibleAccount: job.accountHandle, title, body, uploadedImages, verification: 'browser-readback' };
   }
   throw new Error('Native channel editor adapter unavailable');
@@ -108,6 +171,60 @@ async function naverParagraphTexts(page, selector) {
 
 async function readNaverTitle(page) { return (await naverParagraphTexts(page, '.se-title-text .se-text-paragraph')).join('').trim(); }
 async function readNaverBody(page) { return (await naverParagraphTexts(page, '.se-component[data-a11y-title="본문"] .se-text-paragraph')).map(text => text.trim()).join('\n').trim(); }
+function naverTextLines(text) { return text.replace(/\r\n/g, '\n').split('\n').map(line => line.trim()).filter(Boolean).join('\n'); }
+async function selectNaverParagraph(paragraph, endOnly = false) {
+  await paragraph.click();
+  await paragraph.evaluate((node, collapse) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    if (collapse) range.collapse(false);
+    const selection = node.ownerDocument.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }, endOnly);
+}
+async function exactNaverBodyParagraph(page, heading) {
+  const selector = '.se-component[data-a11y-title="본문"] .se-text-paragraph';
+  const texts = await naverParagraphTexts(page, selector);
+  const matches = texts.flatMap((text, index) => text.trim() === heading ? [index] : []);
+  if (matches.length !== 1) throw new Error(`Naver heading missing or ambiguous: ${heading} (matches=${matches.length}, paragraphs=${texts.length})`);
+  return page.frameLocator('iframe#mainFrame').locator(selector).nth(matches[0]);
+}
+async function verifyNaverHeadings(page, headings) {
+  const frame = page.frameLocator('iframe#mainFrame');
+  for (const heading of headings) {
+    const paragraph = await exactNaverBodyParagraph(page, heading);
+    await selectNaverParagraph(paragraph);
+    const sizeLabel = (await frame.locator('.se-property-toolbar-label-select-button.se-font-size-code-toolbar-button').innerText()).trim();
+    const styles = await paragraph.evaluate(node => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      const values = [];
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent.trim()) continue;
+        const style = getComputedStyle(walker.currentNode.parentElement);
+        values.push({ weight: Number(style.fontWeight) || (style.fontWeight === 'bold' ? 700 : 400) });
+      }
+      return values;
+    });
+    if (!sizeLabel.startsWith('24') || !styles.length || styles.some(style => style.weight < 600)) throw new Error(`Naver heading is not size 24 bold: ${heading}`);
+  }
+}
+async function formatNaverHeadings(page, headings) {
+  const frame = page.frameLocator('iframe#mainFrame');
+  for (const heading of headings) {
+    const paragraph = await exactNaverBodyParagraph(page, heading);
+    // SmartEditor ignores DOM ranges set by script; select with the keyboard so the editor registers it.
+    await paragraph.click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Shift+Home');
+    await frame.locator('.se-property-toolbar-label-select-button.se-font-size-code-toolbar-button').click();
+    const size = frame.locator('.se-toolbar-option-font-size-code-fs24-button').filter({ visible: true }).first();
+    await size.waitFor({ state: 'visible', timeout: 5000 }).catch(() => { throw new Error('Naver size 24 option is unavailable'); });
+    await size.click();
+    await page.keyboard.press('Control+b');
+  }
+  await verifyNaverHeadings(page, headings);
+}
 
 export async function uploadNaverImages(page, images) {
   const frame = page.frameLocator('iframe#mainFrame');
@@ -119,7 +236,17 @@ export async function uploadNaverImages(page, images) {
     const nonemptyIndexes = (await naverParagraphTexts(page, paragraphSelector)).flatMap((text, index) => text.trim() ? [index] : []);
     if (nonemptyIndexes.length < image.afterParagraph) throw new Error('Naver target paragraph unavailable');
     const before = new Set(await frame.locator('.se-image img.se-image-resource').evaluateAll(elements => elements.map(element => element.getAttribute('src'))));
-    await paragraphs.nth(nonemptyIndexes[image.afterParagraph - 1]).click();
+    // SmartEditor only honours real clicks, so click just past the paragraph's last character to put the caret at its end.
+    const target = paragraphs.nth(nonemptyIndexes[image.afterParagraph - 1]);
+    const endPoint = await target.evaluate(node => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+      const last = rects.at(-1), box = node.getBoundingClientRect();
+      return last && { x: Math.min(last.right - box.left + 2, box.width - 1), y: last.top + last.height / 2 - box.top };
+    });
+    if (!endPoint) throw new Error('Naver target paragraph has no visible text');
+    await target.click({ position: endPoint });
     await page.keyboard.press('End');
     const chooser = page.waitForEvent('filechooser', { timeout: 10_000 });
     await frame.getByRole('button', { name: '사진 추가' }).click();
@@ -180,27 +307,36 @@ export async function openEditor(job, editorUrl, mapping = null) {
   const url = new URL(editorUrl);
   const allowed = channels[job.channel];
   if (!allowed || url.protocol !== 'https:' || !allowed(url.hostname)) throw new Error('Editor URL is not allowed for this channel');
-  const profile = path.join(profileRoot(), job.accountId);
-  const context = await chromium.launchPersistentContext(profile, { channel: 'msedge', headless: false, acceptDownloads: false });
+  const cdpEndpoint = process.env.POSTGEN_EDGE_CDP_ENDPOINT;
+  const attached = Boolean(cdpEndpoint);
+  const { context } = attached
+    ? await sharedExistingEdge(cdpEndpoint)
+    : { context: await chromium.launchPersistentContext(path.join(profileRoot(), job.accountId), { channel: 'msedge', headless: false, acceptDownloads: false }) };
   let sessionId;
   try {
-    const page = context.pages()[0] || await context.newPage();
+    const page = attached ? await context.newPage() : context.pages()[0] || await context.newPage();
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
     sessionId = crypto.randomUUID();
-    sessions.set(sessionId, { context, page, mapping, editorUrl: url.toString(), jobId: job.id, channel: job.channel, accountHandle: job.accountHandle });
-    if (!allowed(new URL(page.url()).hostname)) return { sessionId, loginRequired: true, message: 'Sign in in the opened PostGen Edge profile, then resume preparation' };
+    sessions.set(sessionId, { context, page, attached, mapping, editorUrl: url.toString(), jobId: job.id, channel: job.channel, accountHandle: job.accountHandle });
+    const loginMessage = attached ? 'Sign in in the connected Edge tab, then resume preparation' : 'Sign in in the opened PostGen Edge profile, then resume preparation';
+    if (job.channel === 'naver' && !(await waitForNaverEditor(page, job.accountHandle, 5000))) return { sessionId, loginRequired: true, message: loginMessage };
+    if (!allowed(new URL(page.url()).hostname)) return { sessionId, loginRequired: true, message: loginMessage };
     const editor = mapping ? await fillEditorPage(page, mapping, job) : await fillNativeEditorPage(page, job);
     if (!mapping && job.draft.images.length) sessions.get(sessionId).imageSources = await nativeImageSources(page, job.channel);
+    if (!mapping && job.channel === 'naver') { sessions.get(sessionId).approvedBody = job.draft.body; sessions.get(sessionId).approvedHeadings = job.draft.headings || []; }
     return { sessionId, editor };
-  } catch (error) { if (sessionId) sessions.delete(sessionId); await context.close(); throw error; }
+  } catch (error) { if (sessionId) sessions.delete(sessionId); if (!attached) await context.close(); throw error; }
 }
 
 export async function resumeEditorSession(sessionId, job) {
   const session = sessions.get(sessionId);
   if (!session || session.jobId !== job.id || session.accountHandle !== job.accountHandle) throw new Error('Unknown editor session');
-  await session.page.goto(session.editorUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  const naverReady = job.channel === 'naver' && await waitForNaverEditor(session.page, job.accountHandle, 5000);
+  if (!naverReady) await session.page.goto(session.editorUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  if (job.channel === 'naver' && !(await waitForNaverEditor(session.page, job.accountHandle))) throw new Error('Naver editor did not open for the approved account');
   const editor = session.mapping ? await fillEditorPage(session.page, session.mapping, job) : await fillNativeEditorPage(session.page, job);
   if (!session.mapping && job.draft.images.length) session.imageSources = await nativeImageSources(session.page, job.channel);
+  if (!session.mapping && job.channel === 'naver') { session.approvedBody = job.draft.body; session.approvedHeadings = job.draft.headings || []; }
   return { sessionId, editor };
 }
 
@@ -214,7 +350,10 @@ export async function readEditorSession(sessionId) {
   if (!session) throw new Error('Unknown editor session');
   if (!session.mapping) {
     if (session.channel === 'tistory') return { editorUrl: session.page.url(), title: await session.page.locator('#post-title-inp').inputValue(), body: await readTistoryBody(session.page) };
-    return { editorUrl: session.page.frames().find(item => item.name() === 'mainFrame')?.url(), title: await readNaverTitle(session.page), body: await readNaverBody(session.page) };
+    const actual = await readNaverBody(session.page);
+    if (session.approvedHeadings?.length) await verifyNaverHeadings(session.page, session.approvedHeadings);
+    const body = session.approvedBody && naverTextLines(actual) === naverTextLines(session.approvedBody) ? session.approvedBody : actual;
+    return { editorUrl: session.page.frames().find(item => item.name() === 'mainFrame')?.url(), title: await readNaverTitle(session.page), body };
   }
   const title = await one(unique(session.page, session.mapping.titleSelector, 'title'), 'Title');
   const body = await one(unique(session.page, session.mapping.bodySelector, 'body'), 'Body');
@@ -240,7 +379,9 @@ export async function configurePlatformReservation(page, channel, at) {
     const frame = page.frameLocator('iframe#mainFrame');
     await frame.getByRole('button', { name: '발행' }).first().click();
     await frame.locator('#open_public').check();
-    await frame.locator('#radio_time2').check();
+    // The radio input sits under its styled label, which intercepts pointer events.
+    await frame.locator('label[for="radio_time2"]').click();
+    if (!(await frame.locator('#radio_time2').isChecked())) throw new Error('Naver reservation mode was not selected');
     const date = frame.locator('input[readonly].input_date__UwKAB');
     const current = (await date.inputValue()).match(/(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})/);
     if (!current) throw new Error('Naver reservation date unavailable');

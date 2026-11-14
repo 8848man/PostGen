@@ -65,6 +65,7 @@
 **맥락:** Claude Code 기록을 Codex에서 읽는 것만으로는 Claude에서 Postgen을 직접 사용할 수 없다. 사용자는 Codex·Claude 및 향후 호환 AI에서 같은 제작 경험을 원한다.  
 **결정:** Codex CLI는 첫 구현·검증 호스트로 유지한다. 제품은 Claude Code, Claude Cowork 및 계약을 만족하는 다른 AI 호스트에서도 Postgen 호출·초안 생성·수정·내보내기를 지원하는 것을 필수 목표로 한다. 입력용 Source Provider와 실행용 Host Adapter는 별도 확장점이다. 공통 지식·스타일·초안 계약은 특정 호스트의 인증·세션 위치·CLI 명령에 의존하지 않는다.  
 **결과:** Claude Code 실행, Cowork의 실행 위치와 파일 접근, 기타 호스트의 기능은 각각 기술 검증과 수용 시험을 거쳐야 한다. `SKILL.md` 형식 호환성이나 기록 파서의 존재만으로 실행 지원을 표기하지 않는다. 현재 구현·설치 검증은 Codex에 한정된다.
+**후속 결정 (2026-11-14):** 사용자는 직접 API 키를 쓰지 않고 Codex·Claude Code 구독으로 사용한다. 기존 다중 실행 호스트 목표는 유지하며, PostGen의 OpenAI·Anthropic 직접 API 호출은 목표 범위에서 제외한다. 목표 상태의 단일 원본은 [N-007](next/07-decisions.md)을 따른다.
 
 ## ADR-012 — 브라우저를 통한 채널별 등록 흐름 (2026-10-30, 설계 방향)
 

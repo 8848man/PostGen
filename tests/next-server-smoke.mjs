@@ -23,7 +23,10 @@ try {
   const state = (await api('/api/job', { accountIds: [account.id], audience: 'reader', model: 'codex', sources: [{ type: 'text', text: 'selected source' }] })).state;
   if (state.jobs.length !== 1 || state.jobs[0].accountId !== account.id) throw new Error('Job was not created');
   const jobId = state.jobs[0].id;
-  await api('/api/draft', { jobId, draft: { title: 'Approved title', body: 'Approved body', claims: [], images: [] } });
+  await api('/api/draft', { jobId, draft: { title: 'Approved title', body: 'Approved body', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: 'Test image' }] } });
+  await api('/api/images/approve-plan', { jobId });
+  const imported = await api('/api/images/import', { jobId, imageId: 'image-1', path: path.resolve('tests/fixtures/postgen-editor-test.png'), reviewed: true });
+  if (imported.usage.known !== false || !fs.existsSync(imported.state.jobs[0].draft.images[0].generatedPath)) throw new Error('Host image was not copied or usage was invented');
   await api('/api/approve', { jobId });
   const at = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
   const scheduled = await api('/api/schedule', { jobId, at });

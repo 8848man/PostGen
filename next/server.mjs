@@ -8,12 +8,11 @@ import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, set
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
 import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
-import { generateDraft, generatePlan, draftPrompt } from './generate.mjs';
+import { generateDraft, generatePlan } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
-import { estimateTextRequest, estimateImageRequest, requireCostAcknowledgement } from './cost.mjs';
-import { summarizeUsage, describeUsage } from './usage.mjs';
+import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
-import { importAsset, generateImage, checkImage } from './images.mjs';
+import { importAsset, importGeneratedImage } from './images.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
 import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp } from './mcp-client.mjs';
 import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation } from './browser-adapter.mjs';
@@ -102,6 +101,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { registry: mutateRegistry(current => addAsset(current, { accountId: input.accountId, kind: input.kind, rights: input.rights, storedPath, features: input.features })) });
     }
     if (url.pathname === '/api/job') {
+      if (!['codex', 'claude'].includes(input.model || 'codex')) throw new Error('Codex or Claude Code subscription is required');
       const ids = Array.isArray(input.accountIds) ? input.accountIds : [input.accountId];
       const accounts = ids.map(id => loadRegistry().accounts.find(item => item.id === id));
       if (!accounts.length || accounts.some(account => !account)) throw new Error('Select registered accounts');
@@ -121,9 +121,7 @@ const server = http.createServer(async (req, res) => {
       if (!account) throw new Error('Account no longer exists');
       const sample = resolveAccount(registry, account.channel, account.handle).sample;
       const modelOptions = { provider: input.provider || job.model, model: input.model };
-      const initialInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan };
-      const estimate = estimateTextRequest({ provider: modelOptions.provider, model: modelOptions.model, promptText: draftPrompt(initialInput), calls: 3, outputTokens: 12_000 });
-      requireCostAcknowledgement(estimate, input.costAcknowledged === true);
+      if (!['codex', 'claude'].includes(modelOptions.provider)) throw new Error('Direct API generation is disabled; use Codex or Claude Code');
       const usageEntries = [];
       if (!job.plan) { const planned = await generatePlan(job.sources, modelOptions); usageEntries.push({ step: 'plan', usage: planned.usage }); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
       const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan };
@@ -136,14 +134,6 @@ const server = http.createServer(async (req, res) => {
       const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics));
       const usage = summarizeUsage(usageEntries);
       return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
-    }
-    if (url.pathname === '/api/estimate') {
-      const job = loadState().jobs.find(item => item.id === input.jobId);
-      if (!job) throw new Error('Unknown job');
-      const account = loadRegistry().accounts.find(item => item.id === job.accountId);
-      const sample = account ? resolveAccount(loadRegistry(), account.channel, account.handle).sample : null;
-      if (!account) throw new Error('Unknown account');
-      return json(res, 200, { estimate: estimateTextRequest({ provider: input.provider || job.model, model: input.model, promptChars: draftPrompt({ sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan }), calls: 3, outputTokens: 12_000 }) });
     }
     if (url.pathname === '/api/draft/lock') return json(res, 200, { lock: acquireDraftLock(input.jobId) });
     if (url.pathname === '/api/draft/unlock') return json(res, 200, { released: releaseDraftLock(input.jobId, input.token) });
@@ -158,36 +148,15 @@ const server = http.createServer(async (req, res) => {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');
       return json(res, 200, { state: mutateState(current => approveImagePlan(current, input.jobId, input.assetId || null)) });
     }
-    if (url.pathname === '/api/images/estimate') {
+    if (url.pathname === '/api/images/import') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const image = job?.draft?.images.find(item => item.id === input.imageId);
-      if (job?.status !== 'draft' || !job.draft.imagePlanApproved || !image || image.generatedPath) throw new Error('Image is not ready for generation');
-      const settings = loadSettings();
-      return json(res, 200, { estimate: estimateImageRequest({ model: input.model || 'gpt-image-2.5-sunburst', hasAsset: Boolean(image.assetId), attempts: settings.autoImageCheck ? settings.maxImageGenerations : 1, autoCheck: settings.autoImageCheck }) });
-    }
-    if (url.pathname === '/api/images/generate') {
-      const job = loadState().jobs.find(item => item.id === input.jobId);
-      const image = job?.draft?.images.find(item => item.id === input.imageId);
-      if (job?.status !== 'draft' || !job.draft.imagePlanApproved || !image) throw new Error('Image plan is not approved');
-      const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
-      if (image.assetId && !asset) throw new Error('Selected asset unavailable');
-      const settings = loadSettings();
-      const attempts = settings.autoImageCheck ? settings.maxImageGenerations : 1;
-      const estimate = estimateImageRequest({ model: input.model || 'gpt-image-2.5-sunburst', hasAsset: Boolean(asset), attempts, autoCheck: settings.autoImageCheck });
-      requireCostAcknowledgement(estimate, input.costAcknowledged === true);
-      if (input.costAcknowledged !== true) throw new Error('Image cost requires confirmation');
-      let result, check = null, feedback = '';
-      for (let attempt = 1; attempt <= attempts; attempt++) {
-        result = await generateImage({ description: `${image.description}${feedback}`, asset, model: input.model || undefined });
-        if (!settings.autoImageCheck) break;
-        try { check = await checkImage({ imagePath: result.path, description: image.description, asset }); }
-        catch (error) { check = { passed: false, reason: `자동 점검 실패: ${String(error.message).slice(0,200)}` }; }
-        check.attempts = attempt;
-        if (check.passed) break;
-        feedback = ` Improve on this issue: ${check.reason}`;
-      }
-      const state = mutateState(current => attachGeneratedImage(current, job.id, image.id, result.path, check));
-      return json(res, 200, { state, usage: result.usage, check });
+      if (job?.status !== 'draft' || !job.draft.imagePlanApproved || !image || image.generatedPath) throw new Error('Image is not ready for import');
+      if (input.reviewed !== true) throw new Error('Review the generated image before importing it');
+      const storedPath = await importGeneratedImage(input.path);
+      const check = { passed: true, reason: '호스트 생성 이미지 사용자 시각 검수', attempts: 1 };
+      const state = mutateState(current => attachGeneratedImage(current, job.id, image.id, storedPath, check));
+      return json(res, 200, { state, usage: { ...normalizeUsage(job.model, null), subscriptionReason: '호스트 이미지 작업 사용량을 전달받지 못했습니다.' }, check });
     }
     if (url.pathname === '/api/images/accept-check') return json(res, 200, { state: mutateState(current => acceptImageCheck(current, input.jobId, input.imageId)) });
     if (url.pathname === '/api/approve') return json(res, 200, { state: mutateState(current => approveDraft(current, input.jobId, { conflictAcknowledged: input.conflictAcknowledged === true })) });
