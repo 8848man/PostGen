@@ -269,13 +269,18 @@ export function markScheduleUnknown(state, id, reason) {
     job.status = 'unknown';
   });
 }
-export function confirmPlatformSchedule(state, id, { accountHandle, publishAt, evidence, remoteId = null, reservationUrl = null, verified = false }) {
-  return change(state, id, ['submitting'], job => {
-    if (!verified || accountHandle !== job.accountHandle || !iso(publishAt) || new Date(publishAt).toISOString() !== job.schedule.at || !nonempty(evidence, 1000) || (!nonempty(remoteId, 200) && !nonempty(reservationUrl, 2048))) throw new Error('Platform reservation account, time, and receipt must be verified');
-    job.registration = { accountHandle, publishAt: job.schedule.at, evidence, remoteId, reservationUrl, verified: true, registeredAt: new Date().toISOString() };
-    job.submission = { ...job.submission, outcome: 'registered' };
-    job.status = 'registered';
-  });
+function applyVerifiedRegistration(job, { accountHandle, publishAt, evidence, remoteId = null, reservationUrl = null, verified = false }, extra = {}) {
+  if (!verified || accountHandle !== job.accountHandle || !iso(publishAt) || new Date(publishAt).toISOString() !== job.schedule?.at || !nonempty(evidence, 1000) || (!nonempty(remoteId, 200) && !nonempty(reservationUrl, 2048))) throw new Error('Platform reservation account, time, and receipt must be verified');
+  job.registration = { accountHandle, publishAt: job.schedule.at, evidence, remoteId, reservationUrl, verified: true, registeredAt: new Date().toISOString(), ...extra };
+  job.submission = { ...job.submission, outcome: 'registered' };
+  job.status = 'registered';
+}
+export function confirmPlatformSchedule(state, id, receipt) {
+  return change(state, id, ['submitting'], job => applyVerifiedRegistration(job, receipt));
+}
+// An uncertain submission is never retried; it can only be confirmed by re-reading the platform's reservation list.
+export function confirmUnknownSchedule(state, id, receipt) {
+  return change(state, id, ['unknown'], job => applyVerifiedRegistration(job, receipt, { recheckedAfterUnknown: true }));
 }
 export function recordPublication(state, id, { postUrl, finalTitle, finalBody, source = 'user', finalTextSource = 'user', changedClaimsReviewed = false }, now = new Date()) {
   return change(state, id, ['verification_due','registered','unknown'], job => {

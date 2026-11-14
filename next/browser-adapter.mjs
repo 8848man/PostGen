@@ -21,17 +21,19 @@ export function edgeCdpEndpoint(value) {
 }
 export async function connectExistingEdge(value, connect = (endpoint, options) => chromium.connectOverCDP(endpoint, options), readVersion = async endpoint => {
   const response = await fetch(`${endpoint}/json/version`, { signal: AbortSignal.timeout(5000) });
-  if (!response.ok) throw new Error('Edge debugging endpoint is unavailable');
+  if (!response.ok) throw new Error('Browser debugging endpoint is unavailable');
   return response.json();
 }) {
   const endpoint = edgeCdpEndpoint(value);
   if (endpoint !== 'msedge') {
-    const version = await readVersion(endpoint);
-    if (typeof version?.Browser !== 'string' || !version.Browser.startsWith('Edg/')) throw new Error('The local debugging endpoint is not Microsoft Edge');
+    let version;
+    try { version = await readVersion(endpoint); } catch { throw new Error('Browser debugging endpoint is unavailable. Open the posting Chrome shortcut first'); }
+    // Edge or Chrome only: a dedicated Chrome profile started with --remote-debugging-port does not ask for approval per connection.
+    if (typeof version?.Browser !== 'string' || !/^(Edg|Chrome)\//.test(version.Browser)) throw new Error('The local debugging endpoint is not Microsoft Edge or Google Chrome');
   }
   const browser = await connect(endpoint, { timeout: endpoint === 'msedge' ? 60000 : 10000, noDefaults: true, isLocal: true });
   const context = browser.contexts()[0];
-  if (!context) throw new Error('The connected Edge browser has no default profile');
+  if (!context) throw new Error('The connected browser has no default profile');
   return { browser, context };
 }
 // Reuse a connection the caller already holds so Edge does not ask for debugging approval again.
@@ -195,7 +197,14 @@ async function verifyNaverHeadings(page, headings) {
   for (const heading of headings) {
     const paragraph = await exactNaverBodyParagraph(page, heading);
     await selectNaverParagraph(paragraph);
-    const sizeLabel = (await frame.locator('.se-property-toolbar-label-select-button.se-font-size-code-toolbar-button').innerText()).trim();
+    // The toolbar label updates a moment after selection (slower right after an image upload); poll before judging.
+    const sizeButton = frame.locator('.se-property-toolbar-label-select-button.se-font-size-code-toolbar-button');
+    let sizeLabel = '';
+    for (let attempt = 0; attempt < 10; attempt++) {
+      sizeLabel = (await sizeButton.innerText().catch(() => '')).trim();
+      if (sizeLabel.startsWith('24')) break;
+      await page.waitForTimeout(200);
+    }
     const styles = await paragraph.evaluate(node => {
       const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
       const values = [];
@@ -307,7 +316,7 @@ export async function openEditor(job, editorUrl, mapping = null) {
   const url = new URL(editorUrl);
   const allowed = channels[job.channel];
   if (!allowed || url.protocol !== 'https:' || !allowed(url.hostname)) throw new Error('Editor URL is not allowed for this channel');
-  const cdpEndpoint = process.env.POSTGEN_EDGE_CDP_ENDPOINT;
+  const cdpEndpoint = process.env.POSTGEN_BROWSER_CDP_ENDPOINT || process.env.POSTGEN_EDGE_CDP_ENDPOINT;
   const attached = Boolean(cdpEndpoint);
   const { context } = attached
     ? await sharedExistingEdge(cdpEndpoint)
@@ -318,7 +327,7 @@ export async function openEditor(job, editorUrl, mapping = null) {
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
     sessionId = crypto.randomUUID();
     sessions.set(sessionId, { context, page, attached, mapping, editorUrl: url.toString(), jobId: job.id, channel: job.channel, accountHandle: job.accountHandle });
-    const loginMessage = attached ? 'Sign in in the connected Edge tab, then resume preparation' : 'Sign in in the opened PostGen Edge profile, then resume preparation';
+    const loginMessage = attached ? 'Sign in in the connected browser tab, then resume preparation' : 'Sign in in the opened PostGen Edge profile, then resume preparation';
     if (job.channel === 'naver' && !(await waitForNaverEditor(page, job.accountHandle, 5000))) return { sessionId, loginRequired: true, message: loginMessage };
     if (!allowed(new URL(page.url()).hostname)) return { sessionId, loginRequired: true, message: loginMessage };
     const editor = mapping ? await fillEditorPage(page, mapping, job) : await fillNativeEditorPage(page, job);
@@ -377,7 +386,8 @@ export async function configurePlatformReservation(page, channel, at) {
   if (channel === 'naver') {
     if (Number(target.minute) % 10 !== 0) throw new Error('Naver reservations use ten-minute increments');
     const frame = page.frameLocator('iframe#mainFrame');
-    await frame.getByRole('button', { name: '발행' }).first().click();
+    // exact: the header also has a "예약 발행 N건" button that opens the reservation list instead of the publish panel.
+    await frame.getByRole('button', { name: '발행', exact: true }).first().click();
     await frame.locator('#open_public').check();
     // The radio input sits under its styled label, which intercepts pointer events.
     await frame.locator('label[for="radio_time2"]').click();
@@ -423,6 +433,55 @@ export function reservationReceiptMatches(text, title, at) {
   return date.test(text) && time.test(text);
 }
 
+// Count entries in the Naver "예약 발행 글" list whose title line is the approved title and whose next line is the exact Seoul time.
+// Matching per entry keeps one post's title from pairing with another post's time.
+export function naverReservationListCount(text, title, at) {
+  const lines = String(text).replace(/\r\n/g, '\n').split('\n').map(line => line.trim()).filter(Boolean);
+  if (!lines.some(line => line.includes('예약 발행'))) return 0;
+  return lines.filter((line, index) => line === title.trim() && lines[index + 1] && reservationReceiptMatches(`예약 ${line} ${lines[index + 1]}`, title, at)).length;
+}
+
+// Open a separate editor tab only to read the reservation list, then close it. Never edits or publishes.
+export async function readNaverReservationList(context, handle) {
+  const page = await context.newPage();
+  try {
+    await page.goto(`https://blog.naver.com/${handle}?Redirect=Write&`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    const frame = page.frameLocator('iframe#mainFrame');
+    await frame.locator('.se-title-text .se-text-paragraph').waitFor({ state: 'visible', timeout: 30_000 });
+    const resumePrompt = frame.locator('.se-popup-alert-confirm').filter({ hasText: '작성 중인 글이 있습니다' });
+    if (await resumePrompt.isVisible().catch(() => false)) {
+      await resumePrompt.locator('.se-popup-button-cancel').click();
+      await resumePrompt.waitFor({ state: 'hidden', timeout: 5000 });
+    }
+    const listButton = frame.getByRole('button', { name: /^예약 발행/ });
+    if (await listButton.count() === 0) return '';
+    await listButton.first().click();
+    const popup = frame.locator('[class*="layer_popup"]').filter({ hasText: '예약 발행 글' }).first();
+    await popup.waitFor({ state: 'visible', timeout: 10_000 });
+    return await popup.innerText();
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+// Re-check an uncertain (unknown) Naver submission by reading the reservation list. Never edits or publishes.
+// Exactly one entry with the approved title and Seoul time confirms it; none or duplicates stay unknown for the user to inspect.
+export async function recheckNaverReservation(job) {
+  if (job.channel !== 'naver') throw new Error('Reservation list re-check is available for Naver only');
+  const cdpEndpoint = process.env.POSTGEN_BROWSER_CDP_ENDPOINT || process.env.POSTGEN_EDGE_CDP_ENDPOINT;
+  const context = cdpEndpoint
+    ? (await sharedExistingEdge(cdpEndpoint)).context
+    : await chromium.launchPersistentContext(path.join(profileRoot(), job.accountId), { channel: 'msedge', headless: false, acceptDownloads: false });
+  try {
+    const listUrl = `https://blog.naver.com/${job.accountHandle}?Redirect=Write&`;
+    const count = naverReservationListCount(await readNaverReservationList(context, job.accountHandle), job.draft.title, job.schedule.at);
+    if (count !== 1) return { verified: false, count, reason: count === 0 ? 'Approved title and Seoul time are not in the Naver reservation list' : `Naver reservation list has ${count} entries with the approved title and time; remove duplicates on the platform` };
+    return { verified: true, count, accountHandle: job.accountHandle, publishAt: job.schedule.at, evidence: 'Re-check: Naver editor reservation list shows exactly one entry with the approved title and exact Seoul publication time', remoteId: null, reservationUrl: listUrl };
+  } finally {
+    if (!cdpEndpoint) await context.close();
+  }
+}
+
 export async function submitPlatformReservation(sessionId, job) {
   const session = sessions.get(sessionId);
   if (!session || session.jobId !== job.id || session.channel !== job.channel || session.accountHandle !== job.accountHandle) throw new Error('Editor session does not match approved account');
@@ -435,9 +494,12 @@ export async function submitPlatformReservation(sessionId, job) {
   const configured = await configurePlatformReservation(session.page, job.channel, job.schedule.at);
   if (configured.publishAt !== job.schedule.at) throw new Error('Reservation time mismatch');
   const before = job.channel === 'naver' ? session.page.frames().find(frame => frame.name() === 'mainFrame')?.url() : session.page.url();
+  let listedBefore = 0;
   if (job.channel === 'naver') {
     const buttons = session.page.frameLocator('iframe#mainFrame').getByRole('button', { name: '발행', exact: true });
     if (await buttons.count() !== 2) throw new Error('Naver final reservation button is ambiguous');
+    // Read the list before submitting so an existing reservation with the same title and time cannot count as this one.
+    listedBefore = naverReservationListCount(await readNaverReservationList(session.context, job.accountHandle), job.draft.title, job.schedule.at);
     await buttons.last().click();
   } else {
     if (await session.page.locator('#publish-btn').count() !== 1) throw new Error('Tistory final reservation button is ambiguous');
@@ -446,6 +508,15 @@ export async function submitPlatformReservation(sessionId, job) {
   const currentUrl = () => job.channel === 'naver' ? session.page.frames().find(frame => frame.name() === 'mainFrame')?.url() || session.page.url() : session.page.url();
   let candidate = currentUrl();
   for (let attempt = 0; attempt < 30 && candidate === before; attempt++) { await new Promise(resolve => setTimeout(resolve, 500)); candidate = currentUrl(); }
+  if (job.channel === 'naver') {
+    // After submitting, Naver shows the post list, which has no reservation time. The editor's reservation list does.
+    let listedAfter = 0;
+    try { listedAfter = naverReservationListCount(await readNaverReservationList(session.context, job.accountHandle), job.draft.title, job.schedule.at); }
+    catch (error) { return { verified: false, reason: `Naver reservation list could not be read (${error.message}); inspect platform before retrying`, candidateUrl: candidate }; }
+    if (listedAfter !== listedBefore + 1) return { verified: false, reason: `Naver reservation list does not show one new entry with the approved title and exact Seoul time (before ${listedBefore}, after ${listedAfter}); inspect platform before retrying`, candidateUrl: candidate };
+    const logNo = (() => { try { return new URL(candidate).searchParams.get('logNo'); } catch { return null; } })();
+    return { verified: true, accountHandle: job.accountHandle, publishAt: job.schedule.at, evidence: 'Naver editor reservation list gained one entry with the approved title and exact Seoul publication time', remoteId: logNo, reservationUrl: channels.naver(new URL(candidate).hostname) ? candidate : null };
+  }
   const visible = job.channel === 'naver' ? await session.page.frameLocator('iframe#mainFrame').locator('body').innerText().catch(() => '') : await session.page.locator('body').innerText().catch(() => '');
   const allowed = channels[job.channel];
   if (candidate === before || !allowed(new URL(candidate).hostname) || !reservationReceiptMatches(visible, job.draft.title, job.schedule.at)) return { verified: false, reason: 'Reservation receipt does not show the approved title and exact Seoul publication time; inspect platform before retrying', candidateUrl: candidate };

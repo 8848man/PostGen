@@ -15,7 +15,7 @@ async function registerBrowser(jobId, sessionId) {
 }
 async function preparedBrowser(jobId, output) {
   sessionStorage.setItem(`editor:${jobId}`, output.sessionId);
-  if (output.loginRequired) return say(output.message?.includes('connected Edge') ? '연결된 Edge 탭에서 직접 로그인한 뒤 이 화면의 “로그인 후 재개”를 누르세요.' : 'PostGen 전용 Edge 창에서 직접 로그인한 뒤 이 화면의 “로그인 후 재개”를 누르세요.');
+  if (output.loginRequired) return say(output.message?.includes('connected browser') ? '연결된 브라우저(포스팅용 크롬) 탭에서 직접 로그인한 뒤 이 화면의 “로그인 후 재개”를 누르세요.' : 'PostGen 전용 Edge 창에서 직접 로그인한 뒤 이 화면의 “로그인 후 재개”를 누르세요.');
   const status = output.state.jobs.find(item => item.id === jobId)?.status;
   if (status === 'ready_to_register') return registerBrowser(jobId, output.sessionId);
   say('편집기 내용이 승인본과 달라 재검토가 필요합니다.');
@@ -65,6 +65,7 @@ async function refresh() {
     if (job.status === 'ready_to_register') actions.append(button('승인된 예약 등록 실행', async () => { const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (!sessionId) return say('편집기 세션이 없습니다. 서버를 재시작했다면 예약 등록을 수동으로 확인해야 합니다.'); await registerBrowser(job.id, sessionId); }));
     if (job.status === 'ready_to_register' && cache.connectors.servers.some(item => item.approvedFingerprint)) actions.append(button('승인된 MCP 예약 도구로 등록', async () => { const available = cache.connectors.servers.filter(item => item.approvedFingerprint); const connectorId = prompt(`예약 도구가 있는 서버 ID:\n${available.map(item => `${item.id}: ${item.name}`).join('\n')}`); const toolName = connectorId && prompt('예약 등록 도구 이름 (schedule/reserve)'); if (!connectorId || !toolName) return; const output = await api('/api/registration/mcp', { jobId: job.id, connectorId, toolName }); say(output.result.verified ? 'MCP 예약 등록 확인' : `예약 결과 불명확: ${output.result.reason}`); }));
     if (job.status === 'verification_due') actions.append(button('공개 URL 확인·기록', async () => { const postUrl = prompt('플랫폼에서 공개된 글의 URL'); if (!postUrl) return; const finalTitle = prompt('공개된 제목', job.editor?.title || job.draft.title), finalBody = prompt('공개된 본문', job.editor?.body || job.draft.body); if (finalTitle && finalBody) await api('/api/publication', { jobId: job.id, publication: { postUrl, finalTitle, finalBody, source: 'user', finalTextSource: 'user', changedClaimsReviewed: finalBody === job.editor?.body || confirm('변경된 사실 주장을 검토했습니까?') } }); }));
+    if (job.status === 'unknown' && account?.channel === 'naver') actions.append(button('네이버 예약 목록에서 다시 확인', async () => { const output = await api('/api/registration/recheck', { jobId: job.id }); say(output.result.verified ? '예약 목록에서 확인해 등록됨으로 기록했습니다.' : `등록으로 확인하지 못했습니다: ${output.result.reason}`); }));
     if (['submitting','unknown'].includes(job.status)) article.append(document.createTextNode(' 예약 등록 결과가 불명확합니다. 플랫폼의 예약 목록에서 중복 등록 여부를 먼저 확인하세요. 자동 재시도하지 않습니다.'));
     jobs.append(article);
   }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, approveImagePlan, attachGeneratedImage, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, approveImagePlan, attachGeneratedImage, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
@@ -82,6 +82,13 @@ test('an uncertain platform submission cannot be silently retried', () => {
   state = markScheduleUnknown(state, id, 'No receipt');
   assert.equal(state.jobs[0].status, 'unknown');
   assert.throws(() => beginScheduleSubmission(state, id, now), /Cannot change unknown job/);
+  // only a verified re-read of the platform list can confirm it, with the same account and time checks
+  assert.throws(() => confirmUnknownSchedule(state, id, { accountHandle: 'a', publishAt: '2026-11-08T01:00:00Z', reservationUrl: 'https://blog.naver.com/a?Redirect=Write&', evidence: 'list', verified: true }), /account, time/);
+  assert.throws(() => confirmUnknownSchedule(state, id, { accountHandle: 'a', publishAt: '2026-11-08T00:00:00Z', reservationUrl: 'https://blog.naver.com/a?Redirect=Write&', evidence: 'list', verified: false }), /account, time/);
+  state = confirmUnknownSchedule(state, id, { accountHandle: 'a', publishAt: '2026-11-08T00:00:00Z', reservationUrl: 'https://blog.naver.com/a?Redirect=Write&', evidence: 'list', verified: true });
+  assert.equal(state.jobs[0].status, 'registered');
+  assert.equal(state.jobs[0].registration.recheckedAfterUnknown, true);
+  assert.throws(() => confirmUnknownSchedule(state, id, { accountHandle: 'a', publishAt: '2026-11-08T00:00:00Z', reservationUrl: 'x', evidence: 'list', verified: true }), /Cannot change registered job/);
 });
 
 test('expired source copies can be restored for 14 days, then are purged', () => {

@@ -22,5 +22,14 @@ test('existing Edge connection uses its default profile without launching anothe
   assert.equal(connected.context, defaultContext);
   assert.equal(received.endpoint, 'http://127.0.0.1:9222');
   assert.equal(received.options.noDefaults, true);
-  await assert.rejects(connectExistingEdge('http://127.0.0.1:9222', connect, async () => ({ Browser: 'Chrome/140.0.0.0' })), /not Microsoft Edge/);
+  await assert.rejects(connectExistingEdge('http://127.0.0.1:9222', connect, async () => ({ Browser: 'HeadlessChrome/140.0.0.0' })), /not Microsoft Edge or Google Chrome/);
+  await assert.rejects(connectExistingEdge('http://127.0.0.1:9222', connect, async () => ({ Browser: 'Firefox/140.0' })), /not Microsoft Edge or Google Chrome/);
+});
+
+test('dedicated posting Chrome is accepted and a closed one gives a clear hint', async () => {
+  const defaultContext = { id: 'chrome-default' };
+  const connect = async () => ({ contexts: () => [defaultContext] });
+  const connected = await connectExistingEdge('http://127.0.0.1:9222', connect, async () => ({ Browser: 'Chrome/142.0.0.0' }));
+  assert.equal(connected.context, defaultContext);
+  await assert.rejects(connectExistingEdge('http://127.0.0.1:9222', connect, async () => { throw new Error('ECONNREFUSED'); }), /Open the posting Chrome shortcut first/);
 });

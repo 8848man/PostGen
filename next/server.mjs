@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
@@ -15,7 +15,7 @@ import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, importGeneratedImage } from './images.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
 import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp } from './mcp-client.mjs';
-import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation } from './browser-adapter.mjs';
+import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckNaverReservation } from './browser-adapter.mjs';
 import { loadSettings, updateSettings } from './settings.mjs';
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
@@ -188,6 +188,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ...result, state });
     }
     if (url.pathname === '/api/registration/browser') return json(res, 200, await registerBrowserReservation(input.jobId, input.sessionId));
+    if (url.pathname === '/api/registration/recheck') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      const account = loadRegistry().accounts.find(item => item.id === job?.accountId);
+      if (job?.status !== 'unknown' || !account) throw new Error('Only an uncertain reservation can be re-checked');
+      const result = await recheckNaverReservation({ ...job, channel: account.channel });
+      return json(res, 200, { result, state: result.verified ? mutateState(current => confirmUnknownSchedule(current, job.id, result)) : loadState() });
+    }
     if (url.pathname === '/api/registration/mcp') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const connector = loadConnectors().servers.find(item => item.id === input.connectorId);

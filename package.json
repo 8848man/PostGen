@@ -7,7 +7,8 @@
     "settings": "node skill/postgen/scripts/settings-server.mjs",
     "collect": "node skill/postgen/scripts/collect.mjs",
     "accounts": "node skill/postgen/scripts/account-cli.mjs",
-    "next": "node next/server.mjs"
+    "next": "node next/server.mjs",
+    "next:chrome": "node next/server-chrome.mjs"
   },
   "engines": {
     "node": ">=20"
