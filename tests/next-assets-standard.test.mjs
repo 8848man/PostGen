@@ -79,9 +79,12 @@ test('evaluation must answer every standard self-check item in order', async () 
   const draft = { title: 't', body: 'b' };
   const ok = { ruleScores: [], warnings: [], standardChecks: [{ item: 'A인가', passed: true, reason: 'r' }, { item: 'B인가', passed: false, reason: 'r' }] };
   let prompt;
-  const { evaluation } = await evaluateDraft({ draft, sample: null, audience: 'a', goal: 'g', sources: [], standardChecks: checks }, {}, async p => { prompt = p; return { result: ok, usage: null }; });
+  const { evaluation } = await evaluateDraft({ draft, sample: null, audience: 'a', goal: 'g', sources: [], standardChecks: checks, standardText: '## 규칙\n- 구성: 도입 → 본문' }, {}, async p => { prompt = p; return { result: ok, usage: null }; });
   assert.equal(evaluation.standardChecks[1].passed, false);
   assert.match(prompt, /Standard self-check items: \["A인가","B인가"\]/);
+  // the evaluator judges items by the standard itself, not by the bare item text
+  assert.match(prompt, /<<<STANDARD\n## 규칙\n- 구성: 도입 → 본문\nSTANDARD>>>/);
+  assert.match(prompt, /does not apply/);
   await assert.rejects(evaluateDraft({ draft, sample: null, audience: 'a', goal: 'g', sources: [], standardChecks: checks }, {}, async () => ({ result: { ...ok, standardChecks: ok.standardChecks.slice(0, 1) }, usage: null })), /standard self-check/);
   const none = await evaluateDraft({ draft, sample: null, audience: 'a', goal: 'g', sources: [] }, {}, async () => ({ result: { ruleScores: [], warnings: [], standardChecks: [] }, usage: null }));
   assert.deepEqual(none.evaluation.standardChecks, []);

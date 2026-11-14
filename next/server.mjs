@@ -133,7 +133,7 @@ const server = http.createServer(async (req, res) => {
       output.draft.standard = standardRecord(standard);
       usageEntries.push({ step: 'draft', usage: output.usage });
       let evaluation = null;
-      try { const evaluated = await evaluateDraft({ draft: output.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources, standardChecks: standard?.checks || [] }, modelOptions); evaluation = evaluated.evaluation; usageEntries.push({ step: 'evaluation', usage: evaluated.usage }); }
+      try { const evaluated = await evaluateDraft({ draft: output.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources, standardChecks: standard?.checks || [], standardText: standard?.text || '' }, modelOptions); evaluation = evaluated.evaluation; usageEntries.push({ step: 'evaluation', usage: evaluated.usage }); }
       catch (error) { usageEntries.push({ step: 'evaluation', usage: null }); output.diagnostics.push({ code: 'evaluation_unavailable', message: String(error.message).slice(0,200) }); }
       output.draft.evaluation = evaluation;
       const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics));
