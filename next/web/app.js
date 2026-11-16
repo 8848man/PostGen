@@ -29,8 +29,8 @@ async function preparedBrowser(jobId, output) {
 async function refresh() {
   cache = await api('/api/state');
   const settingsForm = document.querySelector('#settings');
-  for (const name of ['retentionMonths']) settingsForm.elements[name].value = String(cache.settings[name]);
-  for (const name of ['backgroundNotifications']) settingsForm.elements[name].checked = cache.settings[name];
+  for (const name of ['retentionMonths', 'maxImageGenerations']) settingsForm.elements[name].value = String(cache.settings[name]);
+  for (const name of ['backgroundNotifications', 'autoImageCheck']) settingsForm.elements[name].checked = cache.settings[name];
   const accountSelect = document.querySelector('#accounts'); const selectedAccounts = new Set([...accountSelect.selectedOptions].map(option => option.value)); accountSelect.replaceChildren();
   const sampleAccountSelect = document.querySelector('#sample-accounts'); sampleAccountSelect.replaceChildren();
   const assetAccountSelect = document.querySelector('#asset-accounts'); assetAccountSelect.replaceChildren();
@@ -76,9 +76,25 @@ async function refresh() {
     if (job.review) { const note = document.createElement('p'); note.className = 'review-note'; note.textContent = `${job.review.decision === 'rejected' ? '반려' : '개선 요청'}: ${job.review.note}`; outcome.append(note); }
     article.append(outcome);
     if (job.draft) { const body = document.createElement('pre'); body.textContent = job.draft.body; article.append(body); }
+    if (job.draft) {
+      const imageReview = document.createElement('section'); imageReview.className = 'image-review';
+      const heading = document.createElement('h4'); heading.textContent = `이미지 ${job.draft.images.length}건`; imageReview.append(heading);
+      if (!job.draft.images.length) { const empty = document.createElement('p'); empty.textContent = '이 글에는 이미지 제안이 없습니다.'; imageReview.append(empty); }
+      for (const image of job.draft.images) {
+        const block = document.createElement('div'); block.className = 'image-review-item';
+        const label = document.createElement('p'); label.textContent = `본문 ${image.afterParagraph}번째 문단 뒤 · ${image.generatedPath ? '연결됨' : image.pendingPath ? '후보 검수 필요' : '생성 전'} · ${image.description}`; block.append(label);
+        if (image.check?.passed === false) { const check = document.createElement('p'); check.textContent = `자동 점검 실패: ${image.check.reason}${image.check.manualAccepted ? ' · 수동 승인됨' : ''}`; block.append(check); }
+        if (image.generatedPath) {
+          try { const preview = await api('/api/images/preview', { jobId: job.id, imageId: image.id }); const picture = document.createElement('img'); picture.className = 'image-preview'; picture.alt = image.description; picture.src = preview.dataUrl; block.append(picture); }
+          catch { const error = document.createElement('p'); error.textContent = '연결된 이미지를 불러오지 못했습니다. 파일을 확인하세요.'; block.append(error); }
+        }
+        imageReview.append(block);
+      }
+      article.append(imageReview);
+    }
     if (job.draft?.evaluation) { const scores = document.createElement('pre'); scores.textContent = JSON.stringify(job.draft.evaluation, null, 2); article.append(scores); }
     const decisions = document.createElement('div'); decisions.className = 'review-actions'; article.append(decisions);
-    if (job.status === 'draft') decisions.append(button('승인', async () => { if (!confirm(`${account?.handle || job.accountHandle}의 제목·본문·출처를 확인하고 승인합니까?`)) return; const conflictAcknowledged = job.diagnostics?.some(item => item.code === 'source_conflict') ? confirm('미해결 출처 충돌을 확인하고 승인합니까?') : false; await api('/api/approve', { jobId: job.id, conflictAcknowledged }); }));
+    if (job.status === 'draft') decisions.append(button('승인', async () => { if (!confirm(`${account?.handle || job.accountHandle}의 제목·본문·출처와 이미지 ${job.draft.images.length}건의 위치·내용을 확인하고 승인합니까?`)) return; const conflictAcknowledged = job.diagnostics?.some(item => item.code === 'source_conflict') ? confirm('미해결 출처 충돌을 확인하고 승인합니까?') : false; await api('/api/approve', { jobId: job.id, conflictAcknowledged }); }));
     if (['draft','approved'].includes(job.status)) for (const [decision, label] of [['improvement_requested','개선'], ['rejected','반려']]) decisions.append(button(label, async () => { const note = prompt(`${label} 사유를 입력하세요. 작업에 기록됩니다.`); if (!note?.trim()) return; await api('/api/draft/review', { jobId: job.id, decision, note: note.trim() }); }));
     if (job.status === 'approved') decisions.append(button('발행 예약', async () => { const at = prompt('플랫폼 공개 시각 (ISO 8601, 최소 10분 뒤)'); if (!at || !confirm(`${channelLabels[account?.channel] || account?.channel} / ${job.accountHandle}에 “${job.draft.title}” 글을 ${at}에 예약 등록합니까?`)) return; await api('/api/schedule', { jobId: job.id, at }); await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
     const actions = document.createElement('div'); actions.className = 'actions'; article.append(actions);
@@ -87,8 +103,8 @@ async function refresh() {
     if (job.status === 'draft') actions.append(button('초안 수정', async () => { const { lock } = await api('/api/draft/lock', { jobId: job.id }); try { const title = prompt('제목', job.draft.title); if (title === null) return; const body = prompt('본문', job.draft.body); if (body === null) return; if (title && body) await api('/api/draft', { jobId: job.id, draft: { ...job.draft, title, body }, lockToken: lock.token, expectedDraftRevision: lock.draftRevision }); } finally { await api('/api/draft/unlock', { jobId: job.id, token: lock.token }); } }));
     if (job.status === 'draft' && job.draft.images.length && !job.draft.imagePlanApproved) actions.append(button('이미지 제안 승인', async () => { const assets = (cache.registry.assets || []).filter(asset => asset.accountId === job.accountId); const choices = assets.map(asset => `${asset.id}: ${asset.kind} / ${asset.features}`).join('\n'); const assetId = prompt(`사용할 자산 ID를 입력하세요. 비우면 자산 없이 생성합니다.\n${choices}`, '') || null; await api('/api/images/approve-plan', { jobId: job.id, assetId }); }));
     if (job.status === 'draft' && job.draft.imagePlanApproved) for (const image of job.draft.images) {
-      if (image.generationHistory?.length) { const tokens = image.generationHistory.filter(entry => entry.usage?.known).reduce((sum, entry) => sum + (entry.usage.totalTokens ?? entry.usage.inputTokens + entry.usage.outputTokens), 0); actions.append(document.createTextNode(`이미지 호출 ${image.generationHistory.length}회 · 확인된 텍스트 토큰 ${tokens} · 이미지 자체 사용량 확인 불가 `)); }
-      if (!image.generatedPath && job.imageProvider === 'codex' && !image.pendingPath) actions.append(button(`Codex 이미지 생성: ${image.description.slice(0,20)}`, async () => { say('이미지 생성 중입니다. 호스트 응답을 기다려 주세요.', 300_000); const result = await api('/api/images/generate', { jobId: job.id, imageId: image.id }); const tokenText = result.usage?.known ? `토큰 입력 ${result.usage.inputTokens} · 출력 ${result.usage.outputTokens}` : '토큰 확인 불가'; say(`이미지 후보가 준비됐습니다. 미리 보고 확인하세요. ${tokenText} · 이미지 사용량 확인 불가`, 60_000); }));
+      if (image.generationHistory?.length) { const tokens = image.generationHistory.reduce((sum, entry) => sum + [entry.usage, entry.checkUsage].filter(usage => usage?.known).reduce((callSum, usage) => callSum + (usage.totalTokens ?? usage.inputTokens + usage.outputTokens), 0), 0); actions.append(document.createTextNode(`이미지 생성 ${image.generationHistory.length}회 · 확인된 텍스트 토큰 ${tokens} · 이미지 자체 사용량 확인 불가 `)); }
+      if (!image.generatedPath && job.imageProvider === 'codex' && !image.pendingPath) actions.append(button(`Codex 이미지 생성: ${image.description.slice(0,20)}`, async () => { say('이미지 생성 중입니다. 호스트 응답을 기다려 주세요.', 300_000); const result = await api('/api/images/generate', { jobId: job.id, imageId: image.id }); const tokenText = result.usage?.known ? `토큰 입력 ${result.usage.inputTokens} · 출력 ${result.usage.outputTokens}` : '토큰 확인 불가'; say(`이미지 후보가 준비됐습니다. ${result.attempts}회 생성 · 자동 점검 ${result.check ? result.check.passed ? '통과' : `실패: ${result.check.reason}` : '꺼짐'} · 직접 미리 보고 확인하세요. ${tokenText} · 이미지 사용량 확인 불가`, 60_000); }));
       if (!image.generatedPath && image.pendingPath) {
         const key = `${job.id}:${image.id}:${image.pendingPath}`;
         actions.append(button(`생성 이미지 미리보기: ${image.description.slice(0,20)}`, async () => { const result = await api('/api/images/preview', { jobId: job.id, imageId: image.id }); previewCache.set(key, result.dataUrl); }));
@@ -116,7 +132,7 @@ async function refresh() {
   }
 }
 document.querySelector('#account').onsubmit = async event => { event.preventDefault(); try { await api('/api/account', Object.fromEntries(new FormData(event.target))); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };
-document.querySelector('#settings').onsubmit = async event => { event.preventDefault(); const form = event.target; try { await api('/api/settings', { retentionMonths: Number(form.elements.retentionMonths.value), backgroundNotifications: form.elements.backgroundNotifications.checked }); await refresh(); say('운영 설정을 저장했습니다.'); } catch (error) { say(error.message); } };
+document.querySelector('#settings').onsubmit = async event => { event.preventDefault(); const form = event.target; try { await api('/api/settings', { retentionMonths: Number(form.elements.retentionMonths.value), backgroundNotifications: form.elements.backgroundNotifications.checked, autoImageCheck: form.elements.autoImageCheck.checked, maxImageGenerations: Number(form.elements.maxImageGenerations.value) }); await refresh(); say('운영 설정을 저장했습니다.'); } catch (error) { say(error.message); } };
 document.querySelector('#sample').onsubmit = async event => { event.preventDefault(); const input = Object.fromEntries(new FormData(event.target)); try { const result = await api('/api/sample/analyze', input); document.querySelector('#analysis').textContent = JSON.stringify(result.analysis, null, 2); const registry = await api('/api/sample', { ...input, rules: result.analysis.rules }); say('제안 규칙을 확인한 뒤 아래에서 승인하세요.'); await refresh(); } catch (error) { say(error.message); } };
 document.querySelector('#asset').onsubmit = async event => { event.preventDefault(); try { await api('/api/asset', Object.fromEntries(new FormData(event.target))); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };
 document.querySelector('#connector').onsubmit = async event => { event.preventDefault(); const input = Object.fromEntries(new FormData(event.target)); try { input.args = JSON.parse(input.args); await api('/api/connector', input); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };

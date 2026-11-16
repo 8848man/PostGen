@@ -183,8 +183,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/images/preview') {
       const image = loadState().jobs.find(item => item.id === input.jobId)?.draft?.images.find(item => item.id === input.imageId);
-      if (!image?.pendingPath) throw new Error('No image candidate to preview');
-      return json(res, 200, { dataUrl: await previewGeneratedImage(image.pendingPath) });
+      const imagePath = image?.pendingPath || image?.generatedPath;
+      if (!imagePath) throw new Error('No image to preview');
+      return json(res, 200, { dataUrl: await previewGeneratedImage(imagePath) });
     }
     if (url.pathname === '/api/images/confirm') {
       if (input.reviewed !== true) throw new Error('Visual review is required before connecting an image');

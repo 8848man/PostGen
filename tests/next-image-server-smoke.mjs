@@ -40,6 +40,8 @@ try {
   const confirmed = await api('/api/images/confirm', { jobId, imageId: 'image-1', candidatePath: candidate, reviewed: true });
   const image = confirmed.state.jobs[0].draft.images[0];
   if (image.generatedPath !== candidate || image.afterParagraph !== 1 || !image.check.passed) throw new Error('Reviewed image was not attached to its paragraph');
+  const approvedPreview = await api('/api/images/preview', { jobId, imageId: 'image-1' });
+  if (!approvedPreview.dataUrl.startsWith('data:image/png;base64,')) throw new Error('Approved image is missing from final review');
   process.stdout.write('Image server smoke passed: split hosts, chart request, preview, candidate identity, visual confirmation, paragraph placement\n');
 } finally {
   child.kill();
