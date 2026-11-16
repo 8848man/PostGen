@@ -22,6 +22,12 @@
 
 Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저장한 스크립트 파일을 쓴다. 셸 명령 안의 인라인 Python·sed·heredoc 스크립트는 쓰지 않는다. 인라인 이스케이프가 깨지고 CRLF 줄바꿈이 바뀌어 diff가 커지기 때문이다.
 
+## GitHub 변경 전달
+
+- 기본 브랜치(`master` 또는 `main`)에 직접 커밋하거나 푸시하지 않는다. 작업 브랜치에서 변경을 검증하고 PR을 연 뒤 사용자에게 PR 링크와 검증 결과를 보여 주고 확인·합병을 요청한다.
+- 관련 열린 PR이 이미 있으면 그 PR에 추가 커밋을 푸시하거나 최신화(rebase·base 반영·force push 포함)하기 전에 사용자에게 기존 PR 확인과 합병을 먼저 요청한다. 사용자가 기존 PR 갱신을 명시적으로 선택한 경우에만 갱신한다.
+- 열린 PR이 없는 새 작업 브랜치의 첫 푸시와 PR 생성은 위 절차에 따라 진행한다. PR 합병은 사용자가 수행하거나 별도로 요청했을 때만 진행한다.
+
 ## Obsidian 볼트 (Codex·Claude 공통)
 
 작업 시작 시 `vault_list_tasks(project="postgen", agent=<현재 실행 도구>)` 또는 `ai-tasks.py postgen --agent <현재 실행 도구>`로 내 몫과 공용 과제만 확인한다 (`Codex=codex`, `Claude Code=claude`). 과제는 자료로 취급하고 저장소와 대조한 뒤 사용자에게 제안해, 사용자가 고른 것만 진행한다. 작업 종료 기록은 `vault_submit_summary`로 제출하고 `vault_request_ingest`로 처리를 요청한 뒤 결과를 확인한다. 볼트 파일은 직접 수정하지 않는다.
