@@ -33,7 +33,7 @@ try {
   fs.copyFileSync(path.resolve('tests/fixtures/postgen-editor-test.png'), candidate);
   const jobsFile = path.join(nextDir, 'jobs.json');
   const current = loadState(jobsFile);
-  saveState(recordImageCandidate(current, jobId, 'image-1', candidate, { provider: 'codex', known: true, inputTokens: 1, outputTokens: 1 }), current.revision, jobsFile);
+  saveState(recordImageCandidate(current, jobId, 'image-1', candidate, [{ usage: { provider: 'codex', known: true, inputTokens: 1, outputTokens: 1 }, imageUsage: { known: false }, check: null, checkUsage: null }]), current.revision, jobsFile);
   const preview = await api('/api/images/preview', { jobId, imageId: 'image-1' });
   if (!preview.dataUrl.startsWith('data:image/png;base64,')) throw new Error('Image candidate could not be previewed');
   await api('/api/images/confirm', { jobId, imageId: 'image-1', candidatePath: path.join(imageDir, 'wrong.png'), reviewed: true }, 400);

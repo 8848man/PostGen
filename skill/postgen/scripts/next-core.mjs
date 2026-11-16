@@ -181,6 +181,7 @@ export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
   });
 }
 
+
 export function approveImagePlan(state, id, assetId = null) {
   return change(state, id, ['draft'], job => {
     job.draft.imagePlanApproved = true;
@@ -196,17 +197,19 @@ export function attachGeneratedImage(state, id, imageId, generatedPath, check = 
     image.check = check;
     delete image.pendingPath;
     delete image.pendingUsage;
+    delete image.pendingCheck;
   });
 }
-export function recordImageCandidate(state, id, imageId, pendingPath, usage, imageUsage = { known: false, reason: '이미지 자체 사용량 확인 불가' }) {
+export function recordImageCandidate(state, id, imageId, pendingPath, attempts) {
   return change(state, id, ['draft'], job => {
     if (!job.draft?.imagePlanApproved || job.imageProvider !== 'codex') throw new Error('Codex image plan is not approved');
     const image = job.draft.images.find(item => item.id === imageId);
-    if (!image || image.generatedPath || image.pendingPath || !nonempty(pendingPath, 2048)) throw new Error('Image is not ready for generation');
+    if (!image || image.generatedPath || image.pendingPath || !nonempty(pendingPath, 2048) || !Array.isArray(attempts) || !attempts.length) throw new Error('Image is not ready for generation');
     image.pendingPath = pendingPath;
-    image.pendingUsage = usage;
-    image.generationAttempts = (image.generationAttempts || 0) + 1;
-    image.generationHistory = [...(image.generationHistory || []), { at: new Date().toISOString(), usage, imageUsage }];
+    image.pendingUsage = attempts.at(-1).usage;
+    image.pendingCheck = attempts.at(-1).check;
+    image.generationAttempts = (image.generationAttempts || 0) + attempts.length;
+    image.generationHistory = [...(image.generationHistory || []), ...attempts.map(attempt => ({ at: new Date().toISOString(), ...attempt }))];
   });
 }
 export function confirmImageCandidate(state, id, imageId, expectedPendingPath) {
@@ -215,9 +218,10 @@ export function confirmImageCandidate(state, id, imageId, expectedPendingPath) {
     if (!image?.pendingPath || image.pendingPath !== expectedPendingPath || image.generatedPath) throw new Error('Image candidate changed; preview it again');
     image.generatedPath = image.pendingPath;
     image.generationUsage = image.pendingUsage;
-    image.check = { passed: true, reason: '파일 형식·크기 검사와 사용자 시각 검수', attempts: image.generationAttempts || 1 };
+    image.check = image.pendingCheck ? { ...image.pendingCheck, attempts: image.generationAttempts || 1 } : { passed: true, reason: '파일 형식·크기 검사와 사용자 시각 검수', attempts: image.generationAttempts || 1 };
     delete image.pendingPath;
     delete image.pendingUsage;
+    delete image.pendingCheck;
   });
 }
 export function discardImageCandidate(state, id, imageId, expectedPendingPath) {
@@ -226,6 +230,7 @@ export function discardImageCandidate(state, id, imageId, expectedPendingPath) {
     if (!image?.pendingPath || image.pendingPath !== expectedPendingPath || image.generatedPath) throw new Error('Image candidate changed; reload it before discarding');
     delete image.pendingPath;
     delete image.pendingUsage;
+    delete image.pendingCheck;
   });
 }
 export function acceptImageCheck(state, id, imageId) {

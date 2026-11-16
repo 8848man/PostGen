@@ -14,7 +14,7 @@ import { loadAssetsStandard, standardRecord, imageRequest } from './assets-stand
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, importGeneratedImage, previewGeneratedImage, discardGeneratedImage } from './images.mjs';
-import { generateHostImage } from './host-image.mjs';
+import { runImageAttempts } from './host-image-flow.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
 import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp } from './mcp-client.mjs';
 import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckNaverReservation } from './browser-adapter.mjs';
@@ -167,16 +167,18 @@ const server = http.createServer(async (req, res) => {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const image = job?.draft?.images.find(item => item.id === input.imageId);
       if (job?.status !== 'draft' || job.imageProvider !== 'codex' || !job.draft.imagePlanApproved || !image || image.generatedPath || image.pendingPath) throw new Error('Codex image is not ready for generation');
-      if ((image.generationAttempts || 0) >= loadSettings().maxImageGenerations) throw new Error('Image generation attempt limit reached');
+      const settings = loadSettings();
+      const remaining = settings.maxImageGenerations - (image.generationAttempts || 0);
+      if (remaining <= 0) throw new Error('Image generation attempt limit reached');
       const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
       if (image.assetId && !asset) throw new Error('Selected asset unavailable');
       const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description });
-      const generated = await generateHostImage({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description });
-      const storedPath = await importGeneratedImage(generated.path);
+      const result = await runImageAttempts({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description }, { remaining, autoCheck: settings.autoImageCheck });
       let state;
-      try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, storedPath, generated.usage, generated.imageUsage)); }
-      catch (error) { await discardGeneratedImage(storedPath); throw error; }
-      return json(res, 200, { state, usage: generated.usage, imageUsage: generated.imageUsage });
+      try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, result.storedPath, result.attempts)); }
+      catch (error) { await discardGeneratedImage(result.storedPath); throw error; }
+      const last = result.attempts.at(-1);
+      return json(res, 200, { state, usage: last.usage, imageUsage: last.imageUsage, check: last.check, attempts: result.attempts.length });
     }
     if (url.pathname === '/api/images/preview') {
       const image = loadState().jobs.find(item => item.id === input.jobId)?.draft?.images.find(item => item.id === input.imageId);
