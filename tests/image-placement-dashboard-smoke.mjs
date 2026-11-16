@@ -47,7 +47,15 @@ try {
   const saved = JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8'));
   assert.equal(saved.jobs[0].draft.images[0].afterParagraph, 2);
   assert.equal(saved.jobs[0].draft.images[0].pendingPath, candidate);
-  process.stdout.write('Image placement dashboard smoke passed: candidate preview and saved paragraph location\n');
+  page.on('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: '이 이미지 확인·연결' }).click();
+  await page.getByRole('button', { name: '승인', exact: true }).waitFor();
+  await page.getByRole('button', { name: '승인', exact: true }).click();
+  await page.getByRole('button', { name: '발행 예약' }).waitFor();
+  const approved = JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8'));
+  assert.equal(approved.jobs[0].draft.images[0].generatedPath, candidate);
+  assert.equal(approved.jobs[0].status, 'approved');
+  process.stdout.write('Image placement dashboard smoke passed: candidate preview, placement, image confirmation, and reservation action\n');
 } finally {
   if (browser) await browser.close();
   if (child) child.kill();

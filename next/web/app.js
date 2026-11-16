@@ -3,7 +3,6 @@ const message = document.querySelector('#message');
 let cache;
 let selectedCampaignId = null;
 let selectedJobId = null;
-const previewCache = new Map();
 const statusLabels = { selected: '원본 등록', draft: '초안 검토', approved: '승인됨', awaiting_registration: '예약 준비', preparing: '편집기 준비', review_required: '변경 재검토', ready_to_register: '등록 대기', submitting: '예약 등록 중', registered: '예약 등록됨', verification_due: '공개 확인 필요', published: '발행 확인됨', unknown: '등록 결과 불명확', expired: '예약 만료', cancelled: '취소됨', failed: '실패' };
 const channelLabels = { naver: '네이버 블로그', tistory: '티스토리', x: 'X', threads: 'Threads' };
 function excerpt(value, max = 140) { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; }
@@ -94,9 +93,14 @@ async function refresh() {
         }
         if (image.check?.passed === false) { const check = document.createElement('p'); check.textContent = `자동 점검 실패: ${image.check.reason}${image.check.manualAccepted ? ' · 수동 승인됨' : ''}`; block.append(check); }
         if (image.generatedPath || image.pendingPath) {
-          try { const preview = await api('/api/images/preview', { jobId: job.id, imageId: image.id }); const picture = document.createElement('img'); picture.className = 'image-preview'; picture.alt = image.description; picture.src = preview.dataUrl; block.append(picture); }
+          try {
+            const preview = await api('/api/images/preview', { jobId: job.id, imageId: image.id });
+            const picture = document.createElement('img'); picture.className = 'image-preview'; picture.alt = image.description; picture.src = preview.dataUrl; block.append(picture);
+            if (job.status === 'draft' && image.pendingPath) block.append(button('이 이미지 확인·연결', async () => { if (!confirm('이미지의 내용과 시각 품질을 확인했습니까?')) return; await api('/api/images/confirm', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath, reviewed: true }); say('검수한 이미지를 해당 문단 뒤에 연결했습니다.'); }));
+          }
           catch { const error = document.createElement('p'); error.textContent = '이미지를 불러오지 못했습니다. 파일을 확인하세요.'; block.append(error); }
         }
+        if (job.status === 'draft' && image.pendingPath) block.append(button('후보 버리고 다시 생성', async () => { if (!confirm('이 이미지 후보를 버립니까?')) return; await api('/api/images/discard', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath }); }));
         imageReview.append(block);
       }
       article.append(imageReview);
@@ -104,7 +108,7 @@ async function refresh() {
     if (job.draft?.evaluation) { const scores = document.createElement('pre'); scores.textContent = JSON.stringify(job.draft.evaluation, null, 2); article.append(scores); }
     const decisions = document.createElement('div'); decisions.className = 'review-actions'; article.append(decisions);
     if (job.status === 'draft' && (!job.draft.images.length || job.draft.images.every(image => image.generatedPath))) decisions.append(button('승인', async () => { if (!confirm(`${account?.handle || job.accountHandle}의 제목·본문·출처와 이미지 ${job.draft.images.length}건의 위치·내용을 확인하고 승인합니까?`)) return; const conflictAcknowledged = job.diagnostics?.some(item => item.code === 'source_conflict') ? confirm('미해결 출처 충돌을 확인하고 승인합니까?') : false; await api('/api/approve', { jobId: job.id, conflictAcknowledged }); }));
-    else if (job.status === 'draft') decisions.append(document.createTextNode('이미지를 생성하고 후보를 확인한 뒤 최종 승인할 수 있습니다.'));
+    else if (job.status === 'draft') decisions.append(document.createTextNode('이미지 카드에서 후보를 확인·연결하세요. 모든 이미지가 연결되면 글 승인, 그다음 발행 예약 버튼이 나타납니다.'));
     if (['draft','approved'].includes(job.status)) for (const [decision, label] of [['improvement_requested','개선'], ['rejected','반려']]) decisions.append(button(label, async () => { const note = prompt(`${label} 사유를 입력하세요. 작업에 기록됩니다.`); if (!note?.trim()) return; await api('/api/draft/review', { jobId: job.id, decision, note: note.trim() }); }));
     if (job.status === 'approved') decisions.append(button('발행 예약', async () => { const at = prompt('플랫폼 공개 시각 (ISO 8601, 최소 10분 뒤)'); if (!at || !confirm(`${channelLabels[account?.channel] || account?.channel} / ${job.accountHandle}에 “${job.draft.title}” 글을 ${at}에 예약 등록합니까?`)) return; await api('/api/schedule', { jobId: job.id, at }); await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
     const actions = document.createElement('div'); actions.className = 'actions'; article.append(actions);
@@ -117,15 +121,6 @@ async function refresh() {
     if (job.status === 'draft' && job.draft.imagePlanApproved) for (const image of job.draft.images) {
       if (image.generationHistory?.length) { const tokens = image.generationHistory.reduce((sum, entry) => sum + [entry.usage, entry.checkUsage].filter(usage => usage?.known).reduce((callSum, usage) => callSum + (usage.totalTokens ?? usage.inputTokens + usage.outputTokens), 0), 0); actions.append(document.createTextNode(`이미지 생성 ${image.generationHistory.length}회 · 확인된 텍스트 토큰 ${tokens} · 이미지 자체 사용량 확인 불가 `)); }
       if (!image.generatedPath && job.imageProvider === 'codex' && !image.pendingPath) actions.append(button(`Codex 이미지 생성: ${image.description.slice(0,20)}`, async () => { say('이미지 생성 중입니다. 호스트 응답을 기다려 주세요.', 300_000); const result = await api('/api/images/generate', { jobId: job.id, imageId: image.id }); const tokenText = result.usage?.known ? `토큰 입력 ${result.usage.inputTokens} · 출력 ${result.usage.outputTokens}` : '토큰 확인 불가'; say(`이미지 후보가 준비됐습니다. ${result.attempts}회 생성 · 자동 점검 ${result.check ? result.check.passed ? '통과' : `실패: ${result.check.reason}` : '꺼짐'} · 직접 미리 보고 확인하세요. ${tokenText} · 이미지 사용량 확인 불가`, 60_000); }));
-      if (!image.generatedPath && image.pendingPath) {
-        const key = `${job.id}:${image.id}:${image.pendingPath}`;
-        actions.append(button(`생성 이미지 미리보기: ${image.description.slice(0,20)}`, async () => { const result = await api('/api/images/preview', { jobId: job.id, imageId: image.id }); previewCache.set(key, result.dataUrl); }));
-        if (previewCache.has(key)) {
-          const preview = document.createElement('img'); preview.className = 'image-preview'; preview.alt = image.description; preview.src = previewCache.get(key); article.append(preview);
-          actions.append(button('이미지 확인·연결', async () => { if (!confirm('이미지의 내용과 시각 품질을 확인했습니까?')) return; await api('/api/images/confirm', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath, reviewed: true }); previewCache.delete(key); say('검수한 이미지를 해당 문단 뒤에 연결했습니다.'); }));
-        }
-        actions.append(button('후보 버리고 다시 생성', async () => { if (!confirm('이 이미지 후보를 버립니까?')) return; await api('/api/images/discard', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath }); previewCache.delete(key); }));
-      }
       if (!image.generatedPath && !image.pendingPath) actions.append(button(`직접 만든 이미지 연결: ${image.description.slice(0,20)}`, async () => { const asset = (cache.registry.assets || []).find(item => item.id === image.assetId); const { request } = await api('/api/images/request', { jobId: job.id, imageId: image.id }); const guide = request ? `Assets Manager 표준(${job.draft.standard.set})의 ImageGen 요청서입니다. ChatGPT에 아래 참조 이미지를 첨부하고 요청서를 붙여 넣어 만드세요.\n\n참조 이미지 파일:\n${request.referencePaths.join('\n')}\n\n${request.text}${asset ? `\n\n승인된 참고 자산(함께 첨부): ${asset.storedPath}` : ''}` : `호스트의 내장 이미지 기능으로 다음 장면을 만드세요: ${image.description}${asset ? `\n승인된 참고 자산: ${asset.storedPath}\n유지할 특징: ${asset.features}` : ''}`; if (request) { try { await navigator.clipboard.writeText(request.text); say('요청서를 클립보드에 복사했습니다.'); } catch {} } const filePath = prompt(`${guide}\n\n생성한 PNG/JPEG/WebP 파일의 절대 경로를 입력하세요.`); if (!filePath) return; if (!confirm('이미지를 직접 열어 내용과 시각 품질을 확인했습니까?')) return; const result = await api('/api/images/import', { jobId: job.id, imageId: image.id, path: filePath, reviewed: true }); say(`이미지를 연결했습니다. 사용량: ${result.usage.known ? '확인됨' : '확인 불가'}`); }));
       else if (image.check?.passed === false && !image.check.manualAccepted) actions.append(button(`이미지 점검 결과 검토: ${image.check.reason}`, async () => { if (confirm(`점검 결과: ${image.check.reason}\n생성한 파일을 직접 검토한 뒤 이 이미지를 승인합니까?\n${image.generatedPath}`)) await api('/api/images/accept-check', { jobId: job.id, imageId: image.id }); }));
     }
