@@ -20,6 +20,7 @@ export function validateState(state) {
     if (!nonempty(job.id, 80) || ids.has(job.id) || !nonempty(job.accountId, 80) || !nonempty(job.audience, 500) || !Array.isArray(job.sources) || !job.sources.length || !['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired','cancelled','failed','unknown'].includes(job.status)) throw new Error('Invalid job');
     if (job.sources.some(source => !nonempty(source.id, 80) || !nonempty(source.type, 40) || !nonempty(source.ref, 2048) || !(source.expired === true ? source.text === null : nonempty(source.text, 120_000)))) throw new Error('Invalid source snapshot');
     if (job.draft && (!nonempty(job.draft.title, 300) || !nonempty(job.draft.body) || !Array.isArray(job.draft.claims) || !Array.isArray(job.draft.images) || (job.draft.headings !== undefined && (!Array.isArray(job.draft.headings) || job.draft.headings.some(heading => !nonempty(heading, 300)))))) throw new Error('Invalid draft');
+    if (job.review && (!['rejected','improvement_requested'].includes(job.review.decision) || !nonempty(job.review.note, 2000) || !iso(job.review.at))) throw new Error('Invalid draft review');
     if (job.imageProvider !== undefined && !['manual', 'codex'].includes(job.imageProvider)) throw new Error('Invalid image host');
     if (['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired'].includes(job.status) && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
     if (['scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) && (!iso(job.schedule?.at) || !iso(job.schedule?.expiresAt))) throw new Error('Scheduled job needs a time');
@@ -163,6 +164,7 @@ export function setDraft(state, id, draft, diagnostics = []) {
     job.draft = { title: draft.title, body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
+    job.review = null;
     job.status = 'draft';
   });
 }
@@ -177,7 +179,17 @@ export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
     if (job.draft.images.length && (!job.draft.imagePlanApproved || job.draft.images.some(image => !image.generatedPath || (image.check?.passed === false && !image.check.manualAccepted)))) throw new Error('Generate images and review failed image checks before approval');
     if (job.diagnostics.some(item => item.code === 'source_conflict') && !conflictAcknowledged) throw new Error('Source conflict needs explicit acknowledgement');
     job.approval = { at: new Date().toISOString(), draftRevision: job.draft.revision, conflictAcknowledged };
+    job.review = null;
     job.status = 'approved';
+  });
+}
+
+export function reviewDraft(state, id, decision, note) {
+  if (!['rejected', 'improvement_requested'].includes(decision) || !nonempty(note, 2000)) throw new Error('A review reason is required');
+  return change(state, id, ['draft', 'approved'], job => {
+    job.review = { decision, note: note.trim(), at: new Date().toISOString(), draftRevision: job.draft.revision };
+    job.approval = null;
+    job.status = 'draft';
   });
 }
 

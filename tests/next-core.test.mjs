@@ -1,9 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, approveImagePlan, attachGeneratedImage, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, approveImagePlan, attachGeneratedImage, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
+
+test('review reason remains visible and approval is revoked before scheduling', () => {
+  let state = createJob(emptyState(), { accountId: 'account-1', audience: '독자', goal: '설명', sources: [source] });
+  const id = state.jobs[0].id;
+  state = setDraft(state, id, { ...draft, images: [] });
+  assert.throws(() => reviewDraft(state, id, 'rejected', ''), /reason/);
+  state = reviewDraft(state, id, 'improvement_requested', '원본의 시각을 다시 확인');
+  assert.equal(state.jobs[0].review.note, '원본의 시각을 다시 확인');
+  state = approveDraft(state, id);
+  assert.equal(state.jobs[0].review, null);
+  state = reviewDraft(state, id, 'rejected', '제목을 다시 작성');
+  assert.equal(state.jobs[0].status, 'draft');
+  assert.equal(state.jobs[0].approval, null);
+  assert.throws(() => scheduleJob(state, id, '2026-11-20T00:00:00Z'), /Cannot change draft job/);
+  state = setDraft(state, id, { title: '수정한 제목', body: '본문', images: [] });
+  assert.equal(state.jobs[0].review, null);
+});
 
 test('account approval, expiry, and editor checks gate publication', () => {
   let state = createJob(emptyState(), { accountId: 'account-1', audience: '처음 접하는 독자', goal: '설명', sources: [source] });
