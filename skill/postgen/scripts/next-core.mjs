@@ -173,7 +173,8 @@ export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
   return change(state, id, ['draft'], job => {
     if (!job.draft) throw new Error('Missing draft');
     const imageIds = new Set();
-    for (const image of job.draft.images) { if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and paragraph positions'); imageIds.add(image.id); }
+    const paragraphCount = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim()).length;
+    for (const image of job.draft.images) { if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || image.afterParagraph > paragraphCount || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and existing paragraph positions'); imageIds.add(image.id); }
     const bodyLines = job.draft.body.split('\n').map(line => line.trim());
     for (const heading of job.draft.headings || []) if (bodyLines.filter(line => line === heading).length !== 1) throw new Error('Each heading must match one unique body line');
     if (job.draft.images.length && (!job.draft.imagePlanApproved || job.draft.images.some(image => !image.generatedPath || (image.check?.passed === false && !image.check.manualAccepted)))) throw new Error('Generate images and review failed image checks before approval');
@@ -197,6 +198,30 @@ export function approveImagePlan(state, id, assetId = null) {
   return change(state, id, ['draft'], job => {
     job.draft.imagePlanApproved = true;
     job.draft.images = job.draft.images.map(image => ({ ...image, assetId }));
+  });
+}
+export function setImageProvider(state, id, provider) {
+  if (!['manual', 'codex'].includes(provider)) throw new Error('Unknown image host');
+  return change(state, id, ['draft'], job => {
+    if (job.draft.images.some(image => image.pendingPath)) throw new Error('Review pending images before changing the image host');
+    job.imageProvider = provider;
+  });
+}
+export function setImagePosition(state, id, imageId, afterParagraph) {
+  return change(state, id, ['draft'], job => {
+    const image = job.draft?.images.find(item => item.id === imageId);
+    const paragraphs = job.draft?.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim()).length || 0;
+    if (!image || !Number.isInteger(afterParagraph) || afterParagraph < 1 || afterParagraph > paragraphs) throw new Error('Choose a paragraph in this draft');
+    image.afterParagraph = afterParagraph;
+    job.draft.revision = (job.draft.revision || 0) + 1;
+  });
+}
+export function removeImageSuggestion(state, id, imageId) {
+  return change(state, id, ['draft'], job => {
+    const image = job.draft?.images.find(item => item.id === imageId);
+    if (!image || image.pendingPath || image.generatedPath) throw new Error('Only an ungenerated image suggestion can be removed');
+    job.draft.images = job.draft.images.filter(item => item.id !== imageId);
+    job.draft.revision = (job.draft.revision || 0) + 1;
   });
 }
 export function attachGeneratedImage(state, id, imageId, generatedPath, check = null) {
