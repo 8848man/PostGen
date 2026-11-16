@@ -7,13 +7,14 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { loadAssetsStandard, standardRecord, imageRequest } from './assets-standard.mjs';
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
-import { importAsset, importGeneratedImage } from './images.mjs';
+import { importAsset, importGeneratedImage, previewGeneratedImage, discardGeneratedImage } from './images.mjs';
+import { generateHostImage } from './host-image.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
 import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp } from './mcp-client.mjs';
 import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckNaverReservation } from './browser-adapter.mjs';
@@ -103,6 +104,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/job') {
       if (!['codex', 'claude'].includes(input.model || 'codex')) throw new Error('Codex or Claude Code subscription is required');
+      if (!['manual', 'codex'].includes(input.imageProvider || 'manual')) throw new Error('Select manual or Codex image generation');
       const ids = Array.isArray(input.accountIds) ? input.accountIds : [input.accountId];
       const accounts = ids.map(id => loadRegistry().accounts.find(item => item.id === id));
       if (!accounts.length || accounts.some(account => !account)) throw new Error('Select registered accounts');
@@ -111,7 +113,7 @@ const server = http.createServer(async (req, res) => {
         if (!connector) throw new Error('Unknown connected source server');
         return readConnectedSource(connector, spec.toolName, spec.args || {});
       } });
-      const state = mutateState(current => createCampaign(current, { accounts: accounts.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal })), audience: input.audience, sources, model: input.model || 'codex' }));
+      const state = mutateState(current => createCampaign(current, { accounts: accounts.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal })), audience: input.audience, sources, model: input.model || 'codex', imageProvider: input.imageProvider || 'manual' }));
       return json(res, 200, { state });
     }
     if (url.pathname === '/api/generate') {
@@ -161,10 +163,41 @@ const server = http.createServer(async (req, res) => {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');
       return json(res, 200, { state: mutateState(current => approveImagePlan(current, input.jobId, input.assetId || null)) });
     }
+    if (url.pathname === '/api/images/generate') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      const image = job?.draft?.images.find(item => item.id === input.imageId);
+      if (job?.status !== 'draft' || job.imageProvider !== 'codex' || !job.draft.imagePlanApproved || !image || image.generatedPath || image.pendingPath) throw new Error('Codex image is not ready for generation');
+      if ((image.generationAttempts || 0) >= loadSettings().maxImageGenerations) throw new Error('Image generation attempt limit reached');
+      const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
+      if (image.assetId && !asset) throw new Error('Selected asset unavailable');
+      const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description });
+      const generated = await generateHostImage({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description });
+      const storedPath = await importGeneratedImage(generated.path);
+      let state;
+      try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, storedPath, generated.usage, generated.imageUsage)); }
+      catch (error) { await discardGeneratedImage(storedPath); throw error; }
+      return json(res, 200, { state, usage: generated.usage, imageUsage: generated.imageUsage });
+    }
+    if (url.pathname === '/api/images/preview') {
+      const image = loadState().jobs.find(item => item.id === input.jobId)?.draft?.images.find(item => item.id === input.imageId);
+      if (!image?.pendingPath) throw new Error('No image candidate to preview');
+      return json(res, 200, { dataUrl: await previewGeneratedImage(image.pendingPath) });
+    }
+    if (url.pathname === '/api/images/confirm') {
+      if (input.reviewed !== true) throw new Error('Visual review is required before connecting an image');
+      return json(res, 200, { state: mutateState(current => confirmImageCandidate(current, input.jobId, input.imageId, input.candidatePath)) });
+    }
+    if (url.pathname === '/api/images/discard') {
+      const image = loadState().jobs.find(item => item.id === input.jobId)?.draft?.images.find(item => item.id === input.imageId);
+      if (!image?.pendingPath) throw new Error('No image candidate to discard');
+      const state = mutateState(current => discardImageCandidate(current, input.jobId, input.imageId, input.candidatePath));
+      await discardGeneratedImage(image.pendingPath);
+      return json(res, 200, { state });
+    }
     if (url.pathname === '/api/images/import') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const image = job?.draft?.images.find(item => item.id === input.imageId);
-      if (job?.status !== 'draft' || !job.draft.imagePlanApproved || !image || image.generatedPath) throw new Error('Image is not ready for import');
+      if (job?.status !== 'draft' || !job.draft.imagePlanApproved || !image || image.generatedPath || image.pendingPath) throw new Error('Image is not ready for import; discard a pending candidate first');
       if (input.reviewed !== true) throw new Error('Review the generated image before importing it');
       const storedPath = await importGeneratedImage(input.path);
       const check = { passed: true, reason: '호스트 생성 이미지 사용자 시각 검수', attempts: 1 };

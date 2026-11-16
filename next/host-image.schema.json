@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "generatedPath": { "type": "string" },
+    "toolAvailable": { "type": "boolean" }
+  },
+  "required": ["generatedPath", "toolAvailable"],
+  "additionalProperties": false
+}

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -21,6 +21,19 @@ export function resolveCodexBinary({ env = process.env, platform = process.platf
       }
     }
   }
+  // The Codex desktop app can bundle a newer CLI than a stale top-level bin/codex.exe.
+  const appBin = env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin');
+  if (appBin && fs.existsSync(appBin)) {
+    const candidates = [path.join(appBin, 'codex.exe')];
+    for (const entry of fs.readdirSync(appBin, { withFileTypes: true })) {
+      if (entry.isDirectory()) candidates.push(path.join(appBin, entry.name, 'codex.exe'));
+    }
+    const ranked = candidates.filter(exists).map(binary => {
+      const version = spawnSync(binary, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 3000 }).stdout?.match(/(\d+)\.(\d+)\.(\d+)/);
+      return { binary, score: version ? Number(version[1]) * 1_000_000 + Number(version[2]) * 1_000 + Number(version[3]) : -1 };
+    }).sort((a, b) => b.score - a.score);
+    if (ranked.length) return ranked[0].binary;
+  }
   throw new Error('Codex 실행 파일을 찾지 못했습니다. @openai/codex 설치를 확인하거나 POSTGEN_CODEX_BIN에 codex.exe 전체 경로를 지정하세요.');
 }
 
@@ -31,7 +44,7 @@ export async function codexJson(prompt, schemaPath, options = {}) {
 // 결과와 함께 exec --json의 turn.completed 사용량(토큰)을 돌려준다. 구독 한도 정보는 이 출력에 없다.
 export async function codexRun(prompt, schemaPath, options = {}) {
   const binary = resolveCodexBinary();
-  const args = ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', '--json', '--output-schema', path.resolve(schemaPath)];
+  const args = ['exec', '--ignore-user-config', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', '--json', '--output-schema', path.resolve(schemaPath)];
   if (options.imagePath) args.push('--image', path.resolve(options.imagePath));
   args.push('-');
   const output = await new Promise((resolve, reject) => {

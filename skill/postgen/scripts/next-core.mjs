@@ -20,6 +20,7 @@ export function validateState(state) {
     if (!nonempty(job.id, 80) || ids.has(job.id) || !nonempty(job.accountId, 80) || !nonempty(job.audience, 500) || !Array.isArray(job.sources) || !job.sources.length || !['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired','cancelled','failed','unknown'].includes(job.status)) throw new Error('Invalid job');
     if (job.sources.some(source => !nonempty(source.id, 80) || !nonempty(source.type, 40) || !nonempty(source.ref, 2048) || !(source.expired === true ? source.text === null : nonempty(source.text, 120_000)))) throw new Error('Invalid source snapshot');
     if (job.draft && (!nonempty(job.draft.title, 300) || !nonempty(job.draft.body) || !Array.isArray(job.draft.claims) || !Array.isArray(job.draft.images) || (job.draft.headings !== undefined && (!Array.isArray(job.draft.headings) || job.draft.headings.some(heading => !nonempty(heading, 300)))))) throw new Error('Invalid draft');
+    if (job.imageProvider !== undefined && !['manual', 'codex'].includes(job.imageProvider)) throw new Error('Invalid image host');
     if (['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired'].includes(job.status) && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
     if (['scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) && (!iso(job.schedule?.at) || !iso(job.schedule?.expiresAt))) throw new Error('Scheduled job needs a time');
     if ((['registered','verification_due'].includes(job.status) || job.status === 'published' && job.registration) && job.schedule && (!job.registration?.verified || job.registration.publishAt !== job.schedule.at || job.registration.accountHandle !== job.accountHandle)) throw new Error('Platform reservation must be verified');
@@ -124,23 +125,24 @@ function change(state, id, allowed, apply) {
   return validateState(next);
 }
 
-export function createJob(state, { accountId, accountHandle = accountId, audience, goal, sources, model = 'codex' }) {
+export function createJob(state, { accountId, accountHandle = accountId, audience, goal, sources, model = 'codex', imageProvider = 'manual' }) {
   if (!nonempty(accountId, 80) || !nonempty(audience, 500) || !nonempty(goal, 500) || !Array.isArray(sources) || !sources.length) throw new Error('Account, audience, goal, and selected sources are required');
   const next = structuredClone(validateState(state));
   const now = new Date().toISOString();
-  next.jobs.push({ id: crypto.randomUUID(), campaignId: crypto.randomUUID(), accountId, accountHandle, audience, goal, model, sources, plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
+  next.jobs.push({ id: crypto.randomUUID(), campaignId: crypto.randomUUID(), accountId, accountHandle, audience, goal, model, imageProvider, sources, plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
   next.revision++;
   return validateState(next);
 }
 
-export function createCampaign(state, { accounts, audience, sources, model = 'codex' }) {
+export function createCampaign(state, { accounts, audience, sources, model = 'codex', imageProvider = 'manual' }) {
   if (!Array.isArray(accounts) || !accounts.length || !Array.isArray(sources) || !sources.length || !nonempty(audience, 500)) throw new Error('Select accounts, audience, and sources');
+  if (!['manual', 'codex'].includes(imageProvider)) throw new Error('Select a supported image host');
   const next = structuredClone(validateState(state)), now = new Date().toISOString(), campaignId = crypto.randomUUID();
   const uniqueAccounts = new Set();
   for (const account of accounts) {
     if (!nonempty(account.id, 80) || !nonempty(account.handle, 200) || !nonempty(account.goal, 500) || uniqueAccounts.has(account.id)) throw new Error('Invalid campaign account');
     uniqueAccounts.add(account.id);
-    next.jobs.push({ id: crypto.randomUUID(), campaignId, accountId: account.id, accountHandle: account.handle, audience, goal: account.goal, model, sources: structuredClone(sources), plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
+    next.jobs.push({ id: crypto.randomUUID(), campaignId, accountId: account.id, accountHandle: account.handle, audience, goal: account.goal, model, imageProvider, sources: structuredClone(sources), plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
   }
   next.revision++;
   return validateState(next);
@@ -192,6 +194,38 @@ export function attachGeneratedImage(state, id, imageId, generatedPath, check = 
     if (!image || !nonempty(generatedPath, 2048)) throw new Error('Unknown image or path');
     image.generatedPath = generatedPath;
     image.check = check;
+    delete image.pendingPath;
+    delete image.pendingUsage;
+  });
+}
+export function recordImageCandidate(state, id, imageId, pendingPath, usage, imageUsage = { known: false, reason: '이미지 자체 사용량 확인 불가' }) {
+  return change(state, id, ['draft'], job => {
+    if (!job.draft?.imagePlanApproved || job.imageProvider !== 'codex') throw new Error('Codex image plan is not approved');
+    const image = job.draft.images.find(item => item.id === imageId);
+    if (!image || image.generatedPath || image.pendingPath || !nonempty(pendingPath, 2048)) throw new Error('Image is not ready for generation');
+    image.pendingPath = pendingPath;
+    image.pendingUsage = usage;
+    image.generationAttempts = (image.generationAttempts || 0) + 1;
+    image.generationHistory = [...(image.generationHistory || []), { at: new Date().toISOString(), usage, imageUsage }];
+  });
+}
+export function confirmImageCandidate(state, id, imageId, expectedPendingPath) {
+  return change(state, id, ['draft'], job => {
+    const image = job.draft?.images.find(item => item.id === imageId);
+    if (!image?.pendingPath || image.pendingPath !== expectedPendingPath || image.generatedPath) throw new Error('Image candidate changed; preview it again');
+    image.generatedPath = image.pendingPath;
+    image.generationUsage = image.pendingUsage;
+    image.check = { passed: true, reason: '파일 형식·크기 검사와 사용자 시각 검수', attempts: image.generationAttempts || 1 };
+    delete image.pendingPath;
+    delete image.pendingUsage;
+  });
+}
+export function discardImageCandidate(state, id, imageId, expectedPendingPath) {
+  return change(state, id, ['draft'], job => {
+    const image = job.draft?.images.find(item => item.id === imageId);
+    if (!image?.pendingPath || image.pendingPath !== expectedPendingPath || image.generatedPath) throw new Error('Image candidate changed; reload it before discarding');
+    delete image.pendingPath;
+    delete image.pendingUsage;
   });
 }
 export function acceptImageCheck(state, id, imageId) {

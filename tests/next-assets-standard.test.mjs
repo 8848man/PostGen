@@ -61,6 +61,18 @@ test('image request fills the library template and resolves reference originals'
   assert.equal(imageRequest(null, { position: 'p', scene: 's' }), null);
 });
 
+test('chart and diagram image slots use the same request and original reference mapping', () => {
+  const chartText = text.replace('naver-illustration-style.png (화풍)', 'naver-graph-style.png (차트·도식 원본)');
+  const standard = parseStandard(JSON.stringify({ found: true, set: 'naver-blog-post', title: '네이버 블로그 포스팅', text: chartText, files: ['C:/lib/image/naver-graph-style.png'] }), 'naver-blog-post');
+  const chart = imageRequest(standardRecord(standard), { position: '본문 3번째 문단 뒤', scene: '가로축은 시간, 세로축은 완료 건수인 두 계열 선 차트.' });
+  const diagram = imageRequest(standardRecord(standard), { position: '본문 5번째 문단 뒤', scene: '세 단계가 화살표로 이어진 흐름도.' });
+  assert.match(chart.text, /본문 3번째 문단 뒤/);
+  assert.match(chart.text, /두 계열 선 차트/);
+  assert.deepEqual(chart.referencePaths, ['C:/lib/image/naver-graph-style.png']);
+  assert.match(diagram.text, /본문 5번째 문단 뒤/);
+  assert.match(diagram.text, /흐름도/);
+});
+
 test('draft prompt carries the standard as the base rule set and keeps JSON output', async () => {
   const standard = parseStandard(raw, 'naver-blog-post');
   const input = { sources: [{ id: 's1', type: 'text', text: '근거' }], account: { channel: 'naver', handle: 'h' }, sample: null, audience: 'a', goal: 'g', plan: null, standard };

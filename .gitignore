@@ -8,3 +8,4 @@ playwright-report/
 test-results/
 browser-profile/
 browser-profiles/
+output/codex-cli-image-test/

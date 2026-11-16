@@ -6,6 +6,26 @@ import { dataDir } from '../skill/postgen/scripts/profile.mjs';
 const imageRoot = () => path.join(process.env.POSTGEN_NEXT_DIR || path.join(dataDir(), 'next'), 'images');
 const allowed = new Map([['.png','image/png'],['.jpg','image/jpeg'],['.jpeg','image/jpeg'],['.webp','image/webp']]);
 
+async function managedCandidate(file) {
+  const canonical = await fs.realpath(file);
+  const root = await fs.realpath(imageRoot());
+  if (!canonical.startsWith(root + path.sep)) throw new Error('Image candidate is outside PostGen storage');
+  return canonical;
+}
+
+export async function previewGeneratedImage(file) {
+  const canonical = await managedCandidate(file);
+  const mime = allowed.get(path.extname(canonical).toLowerCase());
+  if (!mime) throw new Error('Unsupported image preview');
+  const bytes = await fs.readFile(canonical);
+  if (!bytes.length || bytes.length > 15_000_000) throw new Error('Invalid image preview');
+  return `data:${mime};base64,${bytes.toString('base64')}`;
+}
+
+export async function discardGeneratedImage(file) {
+  await fs.unlink(await managedCandidate(file));
+}
+
 export async function importGeneratedImage(file) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error('Generated image requires an absolute file path');
   const canonical = await fs.realpath(file);

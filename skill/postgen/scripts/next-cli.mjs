@@ -30,7 +30,7 @@ function run(args) {
     if (accounts.some(account => !account)) throw new Error('Unknown account');
     let created = [];
     update(current => {
-      const next = createCampaign(current, { accounts: accounts.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal })), audience: spec.audience, sources: spec.sources, model: spec.model || 'codex' });
+      const next = createCampaign(current, { accounts: accounts.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal })), audience: spec.audience, sources: spec.sources, model: spec.model || 'codex', imageProvider: spec.imageProvider || 'manual' });
       created = next.jobs.slice(current.jobs.length).map(item => ({ id: item.id, campaignId: item.campaignId, accountId: item.accountId }));
       return next;
     });
