@@ -80,6 +80,9 @@ test('draft prompt carries the standard as the base rule set and keeps JSON outp
   assert.match(prompt, /set naver-blog-post\) is mandatory/);
   assert.match(prompt, /<<<STANDARD\n<!-- Assets Manager 표준/);
   assert.doesNotMatch(draftPrompt({ ...input, standard: null }), /Assets Manager/);
+  const revised = draftPrompt({ ...input, revisionRequest: { decision: 'improvement_requested', note: '출처와 제목을 다시 연결', previousTitle: '이전 제목', previousBody: '이전 본문' } });
+  assert.match(revised, /출처와 제목을 다시 연결/);
+  assert.match(revised, /previous draft as an independent source/);
   const result = { title: 't', body: '도입이다.\n\n먼저 정한 것\n\n본문이다.', headings: ['먼저 정한 것', '없는 소제목'], claims: [], images: [], diagnostics: [] };
   const { draft, diagnostics } = await generateDraft(input, {}, async () => ({ result, usage: null }));
   assert.deepEqual(draft.headings, ['먼저 정한 것']);

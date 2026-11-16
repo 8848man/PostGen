@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { loadAssetsStandard, standardRecord, imageRequest } from './assets-standard.mjs';
@@ -130,7 +130,8 @@ const server = http.createServer(async (req, res) => {
       // The user's Assets Manager standard (if configured) is loaded per draft; the task is the shared plan's angle,
       // so the library can also pick related past outputs as examples.
       const standard = await loadAssetsStandard({ channel: account.channel, task: `${account.channel === 'naver' ? '네이버' : account.channel} 블로그 포스트: ${job.plan?.angle || job.audience}` });
-      const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan, standard };
+      const revisionRequest = job.review && job.draft ? { decision: job.review.decision, note: job.review.note, previousTitle: job.draft.title, previousBody: job.draft.body.slice(0, 12_000), previousBodyTruncated: job.draft.body.length > 12_000 } : null;
+      const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan, standard, revisionRequest };
       const output = await generateDraft(generationInput, modelOptions);
       output.draft.standard = standardRecord(standard);
       usageEntries.push({ step: 'draft', usage: output.usage });
@@ -208,6 +209,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/images/accept-check') return json(res, 200, { state: mutateState(current => acceptImageCheck(current, input.jobId, input.imageId)) });
     if (url.pathname === '/api/approve') return json(res, 200, { state: mutateState(current => approveDraft(current, input.jobId, { conflictAcknowledged: input.conflictAcknowledged === true })) });
+    if (url.pathname === '/api/draft/review') return json(res, 200, { state: mutateState(current => reviewDraft(current, input.jobId, input.decision, input.note)) });
     if (url.pathname === '/api/schedule') return json(res, 200, { state: mutateState(current => scheduleJob(current, input.jobId, input.at)) });
     if (url.pathname === '/api/reschedule') return json(res, 200, { state: mutateState(current => rescheduleExpired(current, input.jobId, input.at, { factsAndLinksReviewed: input.factsAndLinksReviewed === true })) });
     if (url.pathname === '/api/start') return json(res, 200, { state: mutateState(current => startPreparation(current, input.jobId)) });
