@@ -1,9 +1,11 @@
-const token = new URLSearchParams(location.hash.slice(1)).get('token');
+const hashParams = new URLSearchParams(location.hash.slice(1));
+const token = hashParams.get('token');
 const message = document.querySelector('#message');
 let cache;
 let selectedCampaignId = null;
-let selectedJobId = null;
+let selectedJobId = hashParams.get('job');
 const scheduleInputs = new Map();
+function rememberSelection() { const params = new URLSearchParams({ token }); if (selectedJobId) params.set('job', selectedJobId); history.replaceState(null, '', `#${params}`); }
 const statusLabels = { selected: '원본 등록', draft: '초안 검토', approved: '승인됨', awaiting_registration: '예약 준비', preparing: '편집기 준비', review_required: '변경 재검토', ready_to_register: '등록 대기', submitting: '예약 등록 중', registered: '예약 등록됨', verification_due: '공개 확인 필요', published: '발행 확인됨', unknown: '등록 결과 불명확', expired: '예약 만료', cancelled: '취소됨', failed: '실패' };
 const channelLabels = { naver: '네이버 블로그', tistory: '티스토리', x: 'X', threads: 'Threads' };
 function excerpt(value, max = 140) { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; }
@@ -47,7 +49,9 @@ async function refresh() {
   const campaigns = new Map();
   for (const job of cache.state.jobs) { const key = job.campaignId || job.id; if (!campaigns.has(key)) campaigns.set(key, []); campaigns.get(key).push(job); }
   const sortedCampaigns = [...campaigns.entries()].sort((a, b) => Date.parse(b[1][0].createdAt) - Date.parse(a[1][0].createdAt));
-  if (!campaigns.has(selectedCampaignId)) selectedCampaignId = sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft'))?.[0] || sortedCampaigns[0]?.[0] || null;
+  const rememberedJob = cache.state.jobs.find(job => job.id === selectedJobId);
+  if (rememberedJob) selectedCampaignId = rememberedJob.campaignId || rememberedJob.id;
+  if (!campaigns.has(selectedCampaignId)) selectedCampaignId = sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft' && job.draft?.images?.length))?.[0] || sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft'))?.[0] || sortedCampaigns[0]?.[0] || null;
   const campaignList = document.querySelector('#campaigns'); campaignList.replaceChildren();
   for (const [key, group] of sortedCampaigns) {
     const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card ${key === selectedCampaignId ? 'selected' : ''}`;
@@ -59,7 +63,8 @@ async function refresh() {
   const group = campaigns.get(selectedCampaignId) || [];
   const sourceDetail = document.querySelector('#sources'); sourceDetail.replaceChildren();
   for (const source of group[0]?.sources || []) { const block = document.createElement('div'); block.className = 'source-item'; const meta = document.createElement('small'); meta.textContent = `${source.type} · ${source.ref} · ${source.capturedAt ? new Date(source.capturedAt).toLocaleString('ko-KR') : '수집 시각 없음'}`; const pre = document.createElement('pre'); pre.textContent = source.expired ? '보관 기간이 지나 원본 사본이 정리됐습니다.' : source.text; block.append(meta, pre); sourceDetail.append(block); }
-  if (!group.some(job => job.id === selectedJobId)) selectedJobId = group[0]?.id || null;
+  if (!group.some(job => job.id === selectedJobId)) selectedJobId = group.find(job => job.status === 'draft' && job.draft?.images?.length)?.id || group[0]?.id || null;
+  rememberSelection();
   const channelJobs = document.querySelector('#channel-jobs'); channelJobs.replaceChildren();
   for (const job of group) { const account = cache.registry.accounts.find(item => item.id === job.accountId); const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card channel-card ${job.id === selectedJobId ? 'selected' : ''}`; const channel = document.createElement('small'); channel.textContent = `${channelLabels[account?.channel] || account?.channel || '채널 미상'} · ${account?.handle || job.accountHandle}`; const title = document.createElement('strong'); title.textContent = job.draft?.title || '초안 생성 전'; const summary = document.createElement('span'); summary.textContent = excerpt(job.draft?.body || '등록된 원본으로 글을 생성할 수 있습니다.', 180); const status = document.createElement('em'); status.textContent = job.review ? (job.review.decision === 'rejected' ? '반려됨' : '개선 요청') : statusLabels[job.status] || job.status; item.append(channel, title, summary, status); item.onclick = () => { selectedJobId = job.id; refresh().catch(error => say(error.message)); }; channelJobs.append(item); }
   const jobs = document.querySelector('#jobs'); jobs.replaceChildren();
@@ -76,7 +81,6 @@ async function refresh() {
     if (job.publication?.postUrl) { const link = document.createElement('a'); link.href = job.publication.postUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `공개 글 확인: ${job.publication.postUrl}`; outcome.append(link); }
     if (job.review) { const note = document.createElement('p'); note.className = 'review-note'; note.textContent = `${job.review.decision === 'rejected' ? '반려' : '개선 요청'}: ${job.review.note}`; outcome.append(note); }
     article.append(outcome);
-    if (job.draft) { const body = document.createElement('pre'); body.textContent = job.draft.body; article.append(body); }
     if (job.draft) {
       const imageReview = document.createElement('section'); imageReview.className = 'image-review';
       const heading = document.createElement('h4'); heading.textContent = `이미지 ${job.draft.images.length}건`; imageReview.append(heading);
@@ -97,7 +101,7 @@ async function refresh() {
         if (image.generatedPath || image.pendingPath) {
           try {
             const preview = await api('/api/images/preview', { jobId: job.id, imageId: image.id });
-            const picture = document.createElement('img'); picture.className = 'image-preview'; picture.alt = image.description; picture.src = preview.dataUrl; block.append(picture);
+            const picture = document.createElement('img'); picture.className = 'image-preview'; picture.alt = image.description; picture.src = preview.dataUrl; block.prepend(picture);
           }
           catch { const error = document.createElement('p'); error.textContent = '이미지를 불러오지 못했습니다. 파일을 확인하세요.'; block.append(error); }
         }
@@ -112,6 +116,7 @@ async function refresh() {
       }
       article.append(imageReview);
     }
+    if (job.draft) { const body = document.createElement('pre'); body.textContent = job.draft.body; article.append(body); }
     if (job.draft?.evaluation) { const scores = document.createElement('pre'); scores.textContent = JSON.stringify(job.draft.evaluation, null, 2); article.append(scores); }
     if (job.draft && ['draft','approved'].includes(job.status)) {
       const panel = document.createElement('section'); panel.className = 'publish-panel';

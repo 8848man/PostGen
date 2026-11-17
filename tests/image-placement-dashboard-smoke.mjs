@@ -40,7 +40,11 @@ try {
   const page = await browser.newPage();
   await page.goto(launch);
   await page.locator('.image-review-item img.image-preview').waitFor();
+  assert.equal(new URLSearchParams(new URL(page.url()).hash.slice(1)).get('job'), jobId);
+  await page.reload();
+  await page.locator('.image-review-item img.image-preview').waitFor();
   assert.equal(await page.locator('.image-review-item img.image-preview').count(), 1);
+  assert.ok((await page.locator('.image-review-item img.image-preview').boundingBox()).y < 900);
   await page.getByRole('combobox', { name: 'A diagram 배치 위치' }).selectOption('2');
   await page.getByText('본문 2번째 문단 뒤', { exact: false }).waitFor();
   const saved = JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8'));
