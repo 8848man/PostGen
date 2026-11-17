@@ -1,9 +1,39 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, approveImagePlan, attachGeneratedImage, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
+
+test('one publish action connects every candidate and starts reservation without partial changes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'postgen-publish-'));
+  try {
+    const files = [path.join(dir, 'one.png'), path.join(dir, 'two.png')];
+    files.forEach(file => fs.writeFileSync(file, 'image fixture'));
+    let state = createJob(emptyState(), { accountId: 'account-1', audience: '독자', goal: '설명', sources: [source] });
+    const id = state.jobs[0].id;
+    state = setDraft(state, id, { title: '제목', body: '첫 문단\n둘째 문단', claims: [], images: [{ id: 'one', afterParagraph: 1, description: '첫 그림' }, { id: 'two', afterParagraph: 2, description: '둘째 그림' }] });
+    state = setImageProvider(state, id, 'codex');
+    state = approveImagePlan(state, id);
+    state = recordImageCandidate(state, id, 'one', files[0], [{ check: { passed: false, reason: 'visual check failed' } }]);
+    state = recordImageCandidate(state, id, 'two', files[1], [{ check: { passed: true, reason: 'ok' } }]);
+    const now = new Date('2026-11-17T00:00:00Z');
+    assert.throws(() => publishDraftReservation(state, id, '2026-11-17T00:05:00Z', {}, now), /ten minutes/);
+    assert.equal(state.jobs[0].draft.images[0].pendingPath, files[0]);
+    const result = publishDraftReservation(state, id, '2026-11-18T00:00:00Z', {}, now);
+    assert.equal(result.jobs[0].status, 'awaiting_registration');
+    assert.deepEqual(result.jobs[0].draft.images.map(image => image.generatedPath), files);
+    assert.equal(result.jobs[0].draft.images[0].check.manualAccepted, true);
+    assert.equal(result.jobs[0].approval.draftRevision, result.jobs[0].draft.revision);
+    assert.equal(result.jobs[0].schedule.at, '2026-11-18T00:00:00.000Z');
+    fs.unlinkSync(files[1]);
+    assert.throws(() => publishDraftReservation(state, id, '2026-11-18T00:00:00Z', {}, now), /Image file is missing/);
+    assert.equal(state.jobs[0].draft.images[0].generatedPath, undefined);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('review reason remains visible and approval is revoked before scheduling', () => {
   let state = createJob(emptyState(), { accountId: 'account-1', audience: '독자', goal: '설명', sources: [source] });

@@ -60,6 +60,16 @@ button:disabled { background: #9caec5; cursor: wait; }
 .image-review-item .image-preview { max-height: 320px; object-fit: contain; object-position: left center; }
 .image-placement { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 .image-placement select { flex: 1; min-width: 0; }
+.publish-panel { padding: 18px; margin: 18px 0; border: 1px solid #9bb8e8; border-radius: 14px; background: #edf4ff; }
+.publish-panel h4 { margin: 0 0 8px; font-size: 20px; }
+.publish-panel p { margin: 8px 0; line-height: 1.5; }
+.publish-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
+.publish-row input { max-width: 260px; }
+.publish-row button { background: #1d52af; }
+.advanced-actions { margin: 16px 0; }
+.advanced-actions > summary, .image-options > summary { cursor: pointer; color: #526985; }
+.advanced-actions .actions { margin-top: 10px; }
+button:disabled { cursor: not-allowed; }
 #message { display: block; position: sticky; bottom: 16px; margin-top: 16px; padding: 12px 16px; background: #18372d; color: #fff; border-radius: 10px; min-height: 20px; }
 #message:empty { display: none; }
 @media(max-width: 1100px) { .review-workspace { grid-template-columns: 1fr 1fr; } .review-column:last-child { grid-column: 1 / -1; } .review-column { min-height: 0; } }

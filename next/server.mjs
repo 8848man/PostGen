@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { loadAssetsStandard, standardRecord, imageRequest } from './assets-standard.mjs';
@@ -213,6 +213,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/images/accept-check') return json(res, 200, { state: mutateState(current => acceptImageCheck(current, input.jobId, input.imageId)) });
     if (url.pathname === '/api/approve') return json(res, 200, { state: mutateState(current => approveDraft(current, input.jobId, { conflictAcknowledged: input.conflictAcknowledged === true })) });
+    if (url.pathname === '/api/publish-reservation') return json(res, 200, { state: mutateState(current => publishDraftReservation(current, input.jobId, input.at, { conflictAcknowledged: input.conflictAcknowledged === true })) });
     if (url.pathname === '/api/draft/review') return json(res, 200, { state: mutateState(current => reviewDraft(current, input.jobId, input.decision, input.note)) });
     if (url.pathname === '/api/schedule') return json(res, 200, { state: mutateState(current => scheduleJob(current, input.jobId, input.at)) });
     if (url.pathname === '/api/reschedule') return json(res, 200, { state: mutateState(current => rescheduleExpired(current, input.jobId, input.at, { factsAndLinksReviewed: input.factsAndLinksReviewed === true })) });

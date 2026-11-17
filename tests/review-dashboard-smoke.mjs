@@ -42,13 +42,17 @@ try {
   assert.match(await page.locator('#jobs').innerText(), /티스토리 본문/);
   await page.screenshot({ path: path.join(dir, 'review-dashboard.png'), fullPage: true });
   page.on('dialog', dialog => dialog.accept(dialog.type() === 'prompt' ? '출처 표현을 수정' : undefined));
+  await page.getByText('글·이미지 편집 옵션').click();
   await page.getByRole('button', { name: '반려', exact: true }).click();
   await page.getByText('반려: 출처 표현을 수정').waitFor();
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].review.decision, 'rejected');
-  await page.getByRole('button', { name: '승인', exact: true }).click();
-  await page.getByRole('button', { name: '발행 예약' }).waitFor();
-  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].status, 'approved');
-  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, approval\n');
+  await page.route('**/api/start', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/prepare-browser', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessionId: 'test', loginRequired: true, message: 'Test browser handoff' }) }));
+  await page.getByLabel('공개 시각').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
+  await page.getByRole('button', { name: '발행', exact: true }).click();
+  await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].status, 'awaiting_registration');
+  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation\n');
 } finally {
   if (browser) await browser.close();
   if (child) child.kill();
