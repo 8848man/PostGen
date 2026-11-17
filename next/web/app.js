@@ -1,12 +1,15 @@
-const token = new URLSearchParams(location.hash.slice(1)).get('token');
+const hashParams = new URLSearchParams(location.hash.slice(1));
+const token = hashParams.get('token');
 const message = document.querySelector('#message');
 let cache;
 let selectedCampaignId = null;
-let selectedJobId = null;
-const previewCache = new Map();
+let selectedJobId = hashParams.get('job');
+const scheduleInputs = new Map();
+function rememberSelection() { const params = new URLSearchParams({ token }); if (selectedJobId) params.set('job', selectedJobId); history.replaceState(null, '', `#${params}`); }
 const statusLabels = { selected: '원본 등록', draft: '초안 검토', approved: '승인됨', awaiting_registration: '예약 준비', preparing: '편집기 준비', review_required: '변경 재검토', ready_to_register: '등록 대기', submitting: '예약 등록 중', registered: '예약 등록됨', verification_due: '공개 확인 필요', published: '발행 확인됨', unknown: '등록 결과 불명확', expired: '예약 만료', cancelled: '취소됨', failed: '실패' };
 const channelLabels = { naver: '네이버 블로그', tistory: '티스토리', x: 'X', threads: 'Threads' };
 function excerpt(value, max = 140) { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; }
+function localDateTime(date) { const pad = value => String(value).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`; }
 async function api(path, data) {
   const response = await fetch(path, { method: data ? 'POST' : 'GET', headers: { 'x-postgen-token': token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined });
   const result = await response.json();
@@ -46,7 +49,9 @@ async function refresh() {
   const campaigns = new Map();
   for (const job of cache.state.jobs) { const key = job.campaignId || job.id; if (!campaigns.has(key)) campaigns.set(key, []); campaigns.get(key).push(job); }
   const sortedCampaigns = [...campaigns.entries()].sort((a, b) => Date.parse(b[1][0].createdAt) - Date.parse(a[1][0].createdAt));
-  if (!campaigns.has(selectedCampaignId)) selectedCampaignId = sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft'))?.[0] || sortedCampaigns[0]?.[0] || null;
+  const rememberedJob = cache.state.jobs.find(job => job.id === selectedJobId);
+  if (rememberedJob) selectedCampaignId = rememberedJob.campaignId || rememberedJob.id;
+  if (!campaigns.has(selectedCampaignId)) selectedCampaignId = sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft' && job.draft?.images?.length))?.[0] || sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft'))?.[0] || sortedCampaigns[0]?.[0] || null;
   const campaignList = document.querySelector('#campaigns'); campaignList.replaceChildren();
   for (const [key, group] of sortedCampaigns) {
     const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card ${key === selectedCampaignId ? 'selected' : ''}`;
@@ -58,7 +63,8 @@ async function refresh() {
   const group = campaigns.get(selectedCampaignId) || [];
   const sourceDetail = document.querySelector('#sources'); sourceDetail.replaceChildren();
   for (const source of group[0]?.sources || []) { const block = document.createElement('div'); block.className = 'source-item'; const meta = document.createElement('small'); meta.textContent = `${source.type} · ${source.ref} · ${source.capturedAt ? new Date(source.capturedAt).toLocaleString('ko-KR') : '수집 시각 없음'}`; const pre = document.createElement('pre'); pre.textContent = source.expired ? '보관 기간이 지나 원본 사본이 정리됐습니다.' : source.text; block.append(meta, pre); sourceDetail.append(block); }
-  if (!group.some(job => job.id === selectedJobId)) selectedJobId = group[0]?.id || null;
+  if (!group.some(job => job.id === selectedJobId)) selectedJobId = group.find(job => job.status === 'draft' && job.draft?.images?.length)?.id || group[0]?.id || null;
+  rememberSelection();
   const channelJobs = document.querySelector('#channel-jobs'); channelJobs.replaceChildren();
   for (const job of group) { const account = cache.registry.accounts.find(item => item.id === job.accountId); const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card channel-card ${job.id === selectedJobId ? 'selected' : ''}`; const channel = document.createElement('small'); channel.textContent = `${channelLabels[account?.channel] || account?.channel || '채널 미상'} · ${account?.handle || job.accountHandle}`; const title = document.createElement('strong'); title.textContent = job.draft?.title || '초안 생성 전'; const summary = document.createElement('span'); summary.textContent = excerpt(job.draft?.body || '등록된 원본으로 글을 생성할 수 있습니다.', 180); const status = document.createElement('em'); status.textContent = job.review ? (job.review.decision === 'rejected' ? '반려됨' : '개선 요청') : statusLabels[job.status] || job.status; item.append(channel, title, summary, status); item.onclick = () => { selectedJobId = job.id; refresh().catch(error => say(error.message)); }; channelJobs.append(item); }
   const jobs = document.querySelector('#jobs'); jobs.replaceChildren();
@@ -75,47 +81,86 @@ async function refresh() {
     if (job.publication?.postUrl) { const link = document.createElement('a'); link.href = job.publication.postUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `공개 글 확인: ${job.publication.postUrl}`; outcome.append(link); }
     if (job.review) { const note = document.createElement('p'); note.className = 'review-note'; note.textContent = `${job.review.decision === 'rejected' ? '반려' : '개선 요청'}: ${job.review.note}`; outcome.append(note); }
     article.append(outcome);
-    if (job.draft) { const body = document.createElement('pre'); body.textContent = job.draft.body; article.append(body); }
     if (job.draft) {
       const imageReview = document.createElement('section'); imageReview.className = 'image-review';
       const heading = document.createElement('h4'); heading.textContent = `이미지 ${job.draft.images.length}건`; imageReview.append(heading);
       if (!job.draft.images.length) { const empty = document.createElement('p'); empty.textContent = '이 글에는 이미지 제안이 없습니다.'; imageReview.append(empty); }
+      const paragraphs = job.draft.body.replace(/\r\n/g, '\n').split('\n').map(line => line.trim()).filter(Boolean);
       for (const image of job.draft.images) {
         const block = document.createElement('div'); block.className = 'image-review-item';
         const label = document.createElement('p'); label.textContent = `본문 ${image.afterParagraph}번째 문단 뒤 · ${image.generatedPath ? '연결됨' : image.pendingPath ? '후보 검수 필요' : '생성 전'} · ${image.description}`; block.append(label);
+        if (job.status === 'draft') {
+          const placement = document.createElement('div'); placement.className = 'image-placement';
+          const select = document.createElement('select'); select.setAttribute('aria-label', `${image.description} 배치 위치`);
+          for (const [index, paragraph] of paragraphs.entries()) { const option = document.createElement('option'); option.value = String(index + 1); option.textContent = `${index + 1}번째 문단 뒤 · ${excerpt(paragraph, 70)}`; option.selected = index + 1 === image.afterParagraph; select.append(option); }
+          select.onchange = async () => { try { await api('/api/images/position', { jobId: job.id, imageId: image.id, afterParagraph: Number(select.value) }); await refresh(); say('이미지 위치를 저장했습니다.'); } catch (error) { say(error.message); } };
+          placement.append(select);
+          block.append(placement);
+        }
         if (image.check?.passed === false) { const check = document.createElement('p'); check.textContent = `자동 점검 실패: ${image.check.reason}${image.check.manualAccepted ? ' · 수동 승인됨' : ''}`; block.append(check); }
-        if (image.generatedPath) {
-          try { const preview = await api('/api/images/preview', { jobId: job.id, imageId: image.id }); const picture = document.createElement('img'); picture.className = 'image-preview'; picture.alt = image.description; picture.src = preview.dataUrl; block.append(picture); }
-          catch { const error = document.createElement('p'); error.textContent = '연결된 이미지를 불러오지 못했습니다. 파일을 확인하세요.'; block.append(error); }
+        if (image.generatedPath || image.pendingPath) {
+          try {
+            const preview = await api('/api/images/preview', { jobId: job.id, imageId: image.id });
+            const picture = document.createElement('img'); picture.className = 'image-preview'; picture.alt = image.description; picture.src = preview.dataUrl; block.prepend(picture);
+          }
+          catch { const error = document.createElement('p'); error.textContent = '이미지를 불러오지 못했습니다. 파일을 확인하세요.'; block.append(error); }
+        }
+        if (job.status === 'draft' && !image.generatedPath) {
+          const options = document.createElement('details'); options.className = 'image-options';
+          const summary = document.createElement('summary'); summary.textContent = '이미지 옵션'; options.append(summary);
+          if (image.pendingPath) options.append(button('다시 만들기', async () => { await api('/api/images/discard', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath }); say('후보를 버렸습니다. 이미지 만들기를 눌러 새 후보를 생성하세요.'); }));
+          else options.append(button('이 제안 제외', async () => api('/api/images/remove', { jobId: job.id, imageId: image.id })));
+          block.append(options);
         }
         imageReview.append(block);
       }
       article.append(imageReview);
     }
+    if (job.draft) { const body = document.createElement('pre'); body.textContent = job.draft.body; article.append(body); }
     if (job.draft?.evaluation) { const scores = document.createElement('pre'); scores.textContent = JSON.stringify(job.draft.evaluation, null, 2); article.append(scores); }
-    const decisions = document.createElement('div'); decisions.className = 'review-actions'; article.append(decisions);
-    if (job.status === 'draft') decisions.append(button('승인', async () => { if (!confirm(`${account?.handle || job.accountHandle}의 제목·본문·출처와 이미지 ${job.draft.images.length}건의 위치·내용을 확인하고 승인합니까?`)) return; const conflictAcknowledged = job.diagnostics?.some(item => item.code === 'source_conflict') ? confirm('미해결 출처 충돌을 확인하고 승인합니까?') : false; await api('/api/approve', { jobId: job.id, conflictAcknowledged }); }));
-    if (['draft','approved'].includes(job.status)) for (const [decision, label] of [['improvement_requested','개선'], ['rejected','반려']]) decisions.append(button(label, async () => { const note = prompt(`${label} 사유를 입력하세요. 작업에 기록됩니다.`); if (!note?.trim()) return; await api('/api/draft/review', { jobId: job.id, decision, note: note.trim() }); }));
-    if (job.status === 'approved') decisions.append(button('발행 예약', async () => { const at = prompt('플랫폼 공개 시각 (ISO 8601, 최소 10분 뒤)'); if (!at || !confirm(`${channelLabels[account?.channel] || account?.channel} / ${job.accountHandle}에 “${job.draft.title}” 글을 ${at}에 예약 등록합니까?`)) return; await api('/api/schedule', { jobId: job.id, at }); await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
-    const actions = document.createElement('div'); actions.className = 'actions'; article.append(actions);
+    if (job.draft && ['draft','approved'].includes(job.status)) {
+      const panel = document.createElement('section'); panel.className = 'publish-panel';
+      const title = document.createElement('h4'); title.textContent = '발행'; panel.append(title);
+      const note = document.createElement('p'); note.textContent = `${account?.handle || job.accountHandle} · 이미지 ${job.draft.images.length}장 · 발행을 누르면 표시된 글과 이미지를 함께 승인하고 지정 시각 예약 등록을 시작합니다.`; panel.append(note);
+      const row = document.createElement('div'); row.className = 'publish-row';
+      const time = document.createElement('input'); time.type = 'datetime-local'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id) || localDateTime(new Date(Date.now() + 24 * 60 * 60 * 1000)); time.oninput = () => scheduleInputs.set(job.id, time.value);
+      let conflict = null;
+      const missing = job.draft.images.filter(image => !image.generatedPath && !image.pendingPath).length;
+      const publish = button('발행', async () => {
+        const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
+        const at = parsed.toISOString();
+        await api(job.status === 'draft' ? '/api/publish-reservation' : '/api/schedule', { jobId: job.id, at, conflictAcknowledged: conflict?.checked === true });
+        await api('/api/start', { jobId: job.id });
+        await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
+      });
+      publish.disabled = missing > 0;
+      row.append(time);
+      if (job.status === 'draft' && missing) row.append(button('이미지 만들기', async () => {
+        if (job.imageProvider !== 'codex') await api('/api/images/provider', { jobId: job.id, provider: 'codex' });
+        if (!job.draft.imagePlanApproved) await api('/api/images/approve-plan', { jobId: job.id });
+        const remaining = job.draft.images.filter(image => !image.generatedPath && !image.pendingPath);
+        for (const [index, image] of remaining.entries()) { say(`이미지 ${index + 1}/${remaining.length} 생성 중`, 300_000); await api('/api/images/generate', { jobId: job.id, imageId: image.id }); await refresh(); }
+        say(`${remaining.length}개 이미지가 준비됐습니다. 확인한 뒤 발행하세요.`, 60_000);
+      }));
+      row.append(publish); panel.append(row);
+      const hint = document.createElement('p'); hint.textContent = missing ? `이미지 ${missing}장을 먼저 만드세요.` : '이미지마다 승인할 필요 없이 발행 한 번으로 진행합니다.'; panel.append(hint);
+      if (job.diagnostics?.some(item => item.code === 'source_conflict')) { const label = document.createElement('label'); conflict = document.createElement('input'); conflict.type = 'checkbox'; label.append(conflict, ' 출처 충돌을 확인했습니다'); panel.append(label); }
+      article.append(panel);
+    }
+    const advanced = document.createElement('details'); advanced.className = 'advanced-actions';
+    const advancedLabel = document.createElement('summary'); advancedLabel.textContent = '글·이미지 편집 옵션'; advanced.append(advancedLabel);
+    const actions = document.createElement('div'); actions.className = 'actions'; advanced.append(actions); article.append(advanced);
+    if (['draft','approved'].includes(job.status)) for (const [decision, label] of [['improvement_requested','개선'], ['rejected','반려']]) actions.append(button(label, async () => { const note = prompt(`${label} 사유를 입력하세요. 작업에 기록됩니다.`); if (!note?.trim()) return; await api('/api/draft/review', { jobId: job.id, decision, note: note.trim() }); }));
     if (cache.state.retentionTrash?.some(entry => entry.jobId === job.id && Date.parse(entry.purgeAt) > Date.now())) actions.append(button('원본·기획 복원 (14일)', async () => api('/api/retention/restore', { jobId: job.id })));
     if (['selected','draft'].includes(job.status)) actions.append(button('초안 생성', async () => { say('생성 중입니다. 호스트 응답을 기다려 주세요.'); const generated = await api('/api/generate', { jobId: job.id, provider: job.model }); if (generated.usage?.text) say(`초안 생성 완료 · ${generated.usage.text.replace(/\n/g, ' · ')}`, 60_000); }));
     if (job.status === 'draft') actions.append(button('초안 수정', async () => { const { lock } = await api('/api/draft/lock', { jobId: job.id }); try { const title = prompt('제목', job.draft.title); if (title === null) return; const body = prompt('본문', job.draft.body); if (body === null) return; if (title && body) await api('/api/draft', { jobId: job.id, draft: { ...job.draft, title, body }, lockToken: lock.token, expectedDraftRevision: lock.draftRevision }); } finally { await api('/api/draft/unlock', { jobId: job.id, token: lock.token }); } }));
+    if (job.status === 'draft' && job.draft.images.length && job.imageProvider !== 'codex') actions.append(button('Codex 이미지 생성 사용', async () => api('/api/images/provider', { jobId: job.id, provider: 'codex' })));
     if (job.status === 'draft' && job.draft.images.length && !job.draft.imagePlanApproved) actions.append(button('이미지 제안 승인', async () => { const assets = (cache.registry.assets || []).filter(asset => asset.accountId === job.accountId); const choices = assets.map(asset => `${asset.id}: ${asset.kind} / ${asset.features}`).join('\n'); const assetId = prompt(`사용할 자산 ID를 입력하세요. 비우면 자산 없이 생성합니다.\n${choices}`, '') || null; await api('/api/images/approve-plan', { jobId: job.id, assetId }); }));
+    if (job.status === 'draft' && job.draft.imagePlanApproved && job.imageProvider === 'codex' && job.draft.images.some(image => !image.generatedPath && !image.pendingPath)) actions.append(button('남은 이미지 후보 모두 생성', async () => { const remaining = job.draft.images.filter(image => !image.generatedPath && !image.pendingPath); if (!confirm(`${remaining.length}개 이미지 후보를 순서대로 생성합니까? 생성된 후보는 이 화면에서 확인한 뒤 연결합니다.`)) return; let completed = 0; for (const image of remaining) { say(`이미지 생성 중 ${completed + 1}/${remaining.length}: ${image.description.slice(0, 35)}`, 300_000); try { await api('/api/images/generate', { jobId: job.id, imageId: image.id }); completed++; await refresh(); } catch (error) { say(`${completed}개 생성 후 중단: ${error.message}`, 60_000); return; } } say(`${completed}개 이미지 후보를 생성했습니다. 미리 본 뒤 각각 확인·연결하세요.`, 60_000); }));
     if (job.status === 'draft' && job.draft.imagePlanApproved) for (const image of job.draft.images) {
       if (image.generationHistory?.length) { const tokens = image.generationHistory.reduce((sum, entry) => sum + [entry.usage, entry.checkUsage].filter(usage => usage?.known).reduce((callSum, usage) => callSum + (usage.totalTokens ?? usage.inputTokens + usage.outputTokens), 0), 0); actions.append(document.createTextNode(`이미지 생성 ${image.generationHistory.length}회 · 확인된 텍스트 토큰 ${tokens} · 이미지 자체 사용량 확인 불가 `)); }
       if (!image.generatedPath && job.imageProvider === 'codex' && !image.pendingPath) actions.append(button(`Codex 이미지 생성: ${image.description.slice(0,20)}`, async () => { say('이미지 생성 중입니다. 호스트 응답을 기다려 주세요.', 300_000); const result = await api('/api/images/generate', { jobId: job.id, imageId: image.id }); const tokenText = result.usage?.known ? `토큰 입력 ${result.usage.inputTokens} · 출력 ${result.usage.outputTokens}` : '토큰 확인 불가'; say(`이미지 후보가 준비됐습니다. ${result.attempts}회 생성 · 자동 점검 ${result.check ? result.check.passed ? '통과' : `실패: ${result.check.reason}` : '꺼짐'} · 직접 미리 보고 확인하세요. ${tokenText} · 이미지 사용량 확인 불가`, 60_000); }));
-      if (!image.generatedPath && image.pendingPath) {
-        const key = `${job.id}:${image.id}:${image.pendingPath}`;
-        actions.append(button(`생성 이미지 미리보기: ${image.description.slice(0,20)}`, async () => { const result = await api('/api/images/preview', { jobId: job.id, imageId: image.id }); previewCache.set(key, result.dataUrl); }));
-        if (previewCache.has(key)) {
-          const preview = document.createElement('img'); preview.className = 'image-preview'; preview.alt = image.description; preview.src = previewCache.get(key); article.append(preview);
-          actions.append(button('이미지 확인·연결', async () => { if (!confirm('이미지의 내용과 시각 품질을 확인했습니까?')) return; await api('/api/images/confirm', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath, reviewed: true }); previewCache.delete(key); say('검수한 이미지를 해당 문단 뒤에 연결했습니다.'); }));
-        }
-        actions.append(button('후보 버리고 다시 생성', async () => { if (!confirm('이 이미지 후보를 버립니까?')) return; await api('/api/images/discard', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath }); previewCache.delete(key); }));
-      }
       if (!image.generatedPath && !image.pendingPath) actions.append(button(`직접 만든 이미지 연결: ${image.description.slice(0,20)}`, async () => { const asset = (cache.registry.assets || []).find(item => item.id === image.assetId); const { request } = await api('/api/images/request', { jobId: job.id, imageId: image.id }); const guide = request ? `Assets Manager 표준(${job.draft.standard.set})의 ImageGen 요청서입니다. ChatGPT에 아래 참조 이미지를 첨부하고 요청서를 붙여 넣어 만드세요.\n\n참조 이미지 파일:\n${request.referencePaths.join('\n')}\n\n${request.text}${asset ? `\n\n승인된 참고 자산(함께 첨부): ${asset.storedPath}` : ''}` : `호스트의 내장 이미지 기능으로 다음 장면을 만드세요: ${image.description}${asset ? `\n승인된 참고 자산: ${asset.storedPath}\n유지할 특징: ${asset.features}` : ''}`; if (request) { try { await navigator.clipboard.writeText(request.text); say('요청서를 클립보드에 복사했습니다.'); } catch {} } const filePath = prompt(`${guide}\n\n생성한 PNG/JPEG/WebP 파일의 절대 경로를 입력하세요.`); if (!filePath) return; if (!confirm('이미지를 직접 열어 내용과 시각 품질을 확인했습니까?')) return; const result = await api('/api/images/import', { jobId: job.id, imageId: image.id, path: filePath, reviewed: true }); say(`이미지를 연결했습니다. 사용량: ${result.usage.known ? '확인됨' : '확인 불가'}`); }));
-      else if (image.check?.passed === false && !image.check.manualAccepted) actions.append(button(`이미지 점검 결과 검토: ${image.check.reason}`, async () => { if (confirm(`점검 결과: ${image.check.reason}\n생성한 파일을 직접 검토한 뒤 이 이미지를 승인합니까?\n${image.generatedPath}`)) await api('/api/images/accept-check', { jobId: job.id, imageId: image.id }); }));
     }
     if (['awaiting_registration','due'].includes(job.status)) actions.append(button('플랫폼 예약 등록 재개', async () => { await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
     if (job.status === 'preparing') actions.append(button('MCP 초안 입력', async () => { const available = cache.connectors.servers.filter(item => item.approvedFingerprint); const connectorId = prompt(`허용된 서버 ID를 선택하세요:\n${available.map(item => `${item.id}: ${item.name}`).join('\n')}`); const toolName = connectorId && prompt('초안 입력 도구 이름'); if (connectorId && toolName) { const result = await api('/api/prepare-mcp', { jobId: job.id, connectorId, toolName }); say(JSON.stringify(result.result).slice(0,300)); } }));

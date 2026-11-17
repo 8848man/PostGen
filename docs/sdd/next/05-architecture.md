@@ -22,7 +22,7 @@ PostGen 자체 MCP 서버는 Host Adapter의 추가 진입점으로 검토한다
 
 ## 모델과 이미지
 
-글 생성은 Codex·Claude Code 구독의 호스트 모델을 사용한다. 작업에는 별도의 이미지 호스트 선택을 저장한다. `codex`를 고르면 승인된 이미지 자리마다 Codex CLI `exec --image`에 Assets Manager 원본과 요청서를 전달하고, 생성 파일을 검사해 후보로 보관한다. 사용자가 후보를 미리 보고 확인하면 `afterParagraph` 자리에 연결한다. `manual`은 기존 파일 연결 흐름이다. 직접 API 키를 PostGen에 설정하지 않는다. UI 단독 생성은 후속 단계다. 호출 후 호스트가 제공한 사용량을 표시하고, 제공하지 않은 값은 추정하지 않는다.
+글 생성은 Codex·Claude Code 구독의 호스트 모델을 사용한다. 작업에는 별도의 이미지 호스트 선택을 저장한다. `codex`를 고르면 승인된 이미지 자리마다 Codex CLI `exec --image`에 Assets Manager 원본과 요청서를 전달하고, 생성 파일을 검사해 후보로 보관한다. 사용자가 후보를 미리 보고 `발행`을 선택하면 `afterParagraph` 자리에 함께 연결한다. `manual`은 기존 파일 연결 흐름이다. 직접 API 키를 PostGen에 설정하지 않는다. UI 단독 생성은 후속 단계다. 호출 후 호스트가 제공한 사용량을 표시하고, 제공하지 않은 값은 추정하지 않는다.
 
 사용자의 Assets Manager 표준(N-015, `next/assets-standard.mjs`)을 설정하면(`POSTGEN_ASSETS_CLI`) 초안 생성마다 채널 세트를 라이브러리 명령줄로 받아 초안 프롬프트의 기본 규칙, 선택적으로 실행하는 평가의 자가 점검 항목(`standardChecks`), 이미지 자리마다의 ImageGen 요청서(`/api/images/request`: 표준의 요청서 형식 + 원본 참조 경로)에 쓴다. 초안은 사용한 세트와 지침 sha256을 `draft.standard`로 남긴다. N-017의 기본 경로는 독립 글당 모델 호출 한 번이며, 별도 모델 평가는 요청 시에만 실행한다. 구현 전의 현재 서버 경로는 기획·초안·평가를 각각 호출한다.
 

@@ -173,7 +173,8 @@ export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
   return change(state, id, ['draft'], job => {
     if (!job.draft) throw new Error('Missing draft');
     const imageIds = new Set();
-    for (const image of job.draft.images) { if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and paragraph positions'); imageIds.add(image.id); }
+    const paragraphCount = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim()).length;
+    for (const image of job.draft.images) { if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || image.afterParagraph > paragraphCount || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and existing paragraph positions'); imageIds.add(image.id); }
     const bodyLines = job.draft.body.split('\n').map(line => line.trim());
     for (const heading of job.draft.headings || []) if (bodyLines.filter(line => line === heading).length !== 1) throw new Error('Each heading must match one unique body line');
     if (job.draft.images.length && (!job.draft.imagePlanApproved || job.draft.images.some(image => !image.generatedPath || (image.check?.passed === false && !image.check.manualAccepted)))) throw new Error('Generate images and review failed image checks before approval');
@@ -197,6 +198,30 @@ export function approveImagePlan(state, id, assetId = null) {
   return change(state, id, ['draft'], job => {
     job.draft.imagePlanApproved = true;
     job.draft.images = job.draft.images.map(image => ({ ...image, assetId }));
+  });
+}
+export function setImageProvider(state, id, provider) {
+  if (!['manual', 'codex'].includes(provider)) throw new Error('Unknown image host');
+  return change(state, id, ['draft'], job => {
+    if (job.draft.images.some(image => image.pendingPath)) throw new Error('Review pending images before changing the image host');
+    job.imageProvider = provider;
+  });
+}
+export function setImagePosition(state, id, imageId, afterParagraph) {
+  return change(state, id, ['draft'], job => {
+    const image = job.draft?.images.find(item => item.id === imageId);
+    const paragraphs = job.draft?.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim()).length || 0;
+    if (!image || !Number.isInteger(afterParagraph) || afterParagraph < 1 || afterParagraph > paragraphs) throw new Error('Choose a paragraph in this draft');
+    image.afterParagraph = afterParagraph;
+    job.draft.revision = (job.draft.revision || 0) + 1;
+  });
+}
+export function removeImageSuggestion(state, id, imageId) {
+  return change(state, id, ['draft'], job => {
+    const image = job.draft?.images.find(item => item.id === imageId);
+    if (!image || image.pendingPath || image.generatedPath) throw new Error('Only an ungenerated image suggestion can be removed');
+    job.draft.images = job.draft.images.filter(item => item.id !== imageId);
+    job.draft.revision = (job.draft.revision || 0) + 1;
   });
 }
 export function attachGeneratedImage(state, id, imageId, generatedPath, check = null) {
@@ -227,13 +252,16 @@ export function confirmImageCandidate(state, id, imageId, expectedPendingPath) {
   return change(state, id, ['draft'], job => {
     const image = job.draft?.images.find(item => item.id === imageId);
     if (!image?.pendingPath || image.pendingPath !== expectedPendingPath || image.generatedPath) throw new Error('Image candidate changed; preview it again');
-    image.generatedPath = image.pendingPath;
-    image.generationUsage = image.pendingUsage;
-    image.check = image.pendingCheck ? { ...image.pendingCheck, attempts: image.generationAttempts || 1 } : { passed: true, reason: '파일 형식·크기 검사와 사용자 시각 검수', attempts: image.generationAttempts || 1 };
-    delete image.pendingPath;
-    delete image.pendingUsage;
-    delete image.pendingCheck;
+    connectImageCandidate(image, '사용자가 이미지를 확인함');
   });
+}
+function connectImageCandidate(image, reason = '사용자의 최종 발행 선택으로 확인') {
+  image.generatedPath = image.pendingPath;
+  image.generationUsage = image.pendingUsage;
+  image.check = image.pendingCheck ? { ...image.pendingCheck, attempts: image.generationAttempts || 1 } : { passed: true, reason, attempts: image.generationAttempts || 1 };
+  delete image.pendingPath;
+  delete image.pendingUsage;
+  delete image.pendingCheck;
 }
 export function discardImageCandidate(state, id, imageId, expectedPendingPath) {
   return change(state, id, ['draft'], job => {
@@ -255,6 +283,33 @@ export function acceptImageCheck(state, id, imageId) {
 export function scheduleJob(state, id, at, now = new Date()) {
   return change(state, id, ['approved'], job => {
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
+    job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
+    job.registration = null;
+    job.status = 'awaiting_registration';
+  });
+}
+
+// One final action accepts visible image candidates, approves the draft, and starts reservation preparation.
+export function publishDraftReservation(state, id, at, { conflictAcknowledged = false } = {}, now = new Date()) {
+  return change(state, id, ['draft'], job => {
+    if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
+    if (!job.draft) throw new Error('Missing draft');
+    const paragraphs = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
+    const imageIds = new Set();
+    for (const image of job.draft.images) {
+      if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || image.afterParagraph > paragraphs.length || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and existing paragraph positions');
+      if (!fs.existsSync(image.pendingPath || image.generatedPath || '')) throw new Error('Image file is missing; make the image again before publishing');
+      if (image.pendingPath && !image.generatedPath) connectImageCandidate(image);
+      if (!image.generatedPath) throw new Error('Generate every selected image before publishing');
+      if (image.check?.passed === false) image.check.manualAccepted = true;
+      imageIds.add(image.id);
+    }
+    if (job.draft.images.length) job.draft.imagePlanApproved = true;
+    const bodyLines = job.draft.body.split('\n').map(line => line.trim());
+    for (const heading of job.draft.headings || []) if (bodyLines.filter(line => line === heading).length !== 1) throw new Error('Each heading must match one unique body line');
+    if (job.diagnostics.some(item => item.code === 'source_conflict') && !conflictAcknowledged) throw new Error('Source conflict needs explicit acknowledgement');
+    job.approval = { at: now.toISOString(), draftRevision: job.draft.revision, conflictAcknowledged };
+    job.review = null;
     job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
     job.registration = null;
     job.status = 'awaiting_registration';
