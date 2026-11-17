@@ -9,6 +9,7 @@ import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
 import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
+import { projectNameForSources } from './post-metadata.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { loadAssetsStandard, standardRecord, imageRequest } from './assets-standard.mjs';
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
@@ -113,7 +114,7 @@ const server = http.createServer(async (req, res) => {
         if (!connector) throw new Error('Unknown connected source server');
         return readConnectedSource(connector, spec.toolName, spec.args || {});
       } });
-      const state = mutateState(current => createCampaign(current, { accounts: accounts.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal })), audience: input.audience, sources, model: input.model || 'codex', imageProvider: input.imageProvider || 'manual' }));
+      const state = mutateState(current => createCampaign(current, { accounts: accounts.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal })), audience: input.audience, sources, model: input.model || 'codex', imageProvider: input.imageProvider || 'manual', projectName: input.projectName?.trim() || null }));
       return json(res, 200, { state });
     }
     if (url.pathname === '/api/generate') {
@@ -131,7 +132,7 @@ const server = http.createServer(async (req, res) => {
       // so the library can also pick related past outputs as examples.
       const standard = await loadAssetsStandard({ channel: account.channel, task: `${account.channel === 'naver' ? '네이버' : account.channel} 블로그 포스트: ${job.plan?.angle || job.audience}` });
       const revisionRequest = job.review && job.draft ? { decision: job.review.decision, note: job.review.note, previousTitle: job.draft.title, previousBody: job.draft.body.slice(0, 12_000), previousBodyTruncated: job.draft.body.length > 12_000 } : null;
-      const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan, standard, revisionRequest };
+      const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan, standard, revisionRequest, projectName: job.projectName || projectNameForSources(job.sources) };
       const output = await generateDraft(generationInput, modelOptions);
       output.draft.standard = standardRecord(standard);
       usageEntries.push({ step: 'draft', usage: output.usage });

@@ -380,7 +380,7 @@ function monthSteps(currentYear, currentMonth, target) {
   if (steps < 0 || steps > 12) throw new Error('Publication date must be within the next 12 months');
   return steps;
 }
-export async function configurePlatformReservation(page, channel, at) {
+export async function configurePlatformReservation(page, channel, at, tags = []) {
   const target = seoulScheduleParts(at);
   if (dateTooSoon(at)) throw new Error('Publication time is too soon for safe reservation');
   if (channel === 'naver') {
@@ -388,6 +388,16 @@ export async function configurePlatformReservation(page, channel, at) {
     const frame = page.frameLocator('iframe#mainFrame');
     // exact: the header also has a "예약 발행 N건" button that opens the reservation list instead of the publish panel.
     await frame.getByRole('button', { name: '발행', exact: true }).first().click();
+    if (tags.length) {
+      const tagInput = frame.locator('input[placeholder*="태그"], [class*="tag"] input').filter({ visible: true });
+      if (await tagInput.count() !== 1) throw new Error('Naver tag field is unavailable or ambiguous');
+      for (const tag of tags) {
+        await tagInput.fill(tag);
+        await tagInput.press('Enter');
+      }
+      const tagText = (await frame.locator('[class*="tag"]').allInnerTexts()).join(' ');
+      if (tags.some(tag => !tagText.includes(tag))) throw new Error('Naver tag readback differs from approved draft');
+    }
     await frame.locator('#open_public').check();
     // The radio input sits under its styled label, which intercepts pointer events.
     await frame.locator('label[for="radio_time2"]').click();
@@ -491,7 +501,7 @@ export async function submitPlatformReservation(sessionId, job) {
     const currentSources = await nativeImageSources(session.page, job.channel);
     if (currentSources.length !== job.draft.images.length || JSON.stringify(currentSources) !== JSON.stringify(session.imageSources)) throw new Error('Approved images changed or disappeared from editor');
   }
-  const configured = await configurePlatformReservation(session.page, job.channel, job.schedule.at);
+  const configured = await configurePlatformReservation(session.page, job.channel, job.schedule.at, job.draft.tags || []);
   if (configured.publishAt !== job.schedule.at) throw new Error('Reservation time mismatch');
   const before = job.channel === 'naver' ? session.page.frames().find(frame => frame.name() === 'mainFrame')?.url() : session.page.url();
   let listedBefore = 0;

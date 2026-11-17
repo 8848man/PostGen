@@ -7,3 +7,9 @@ const input = { sources: [{ id: 'source-1', type: 'text', text: '사실', ref: '
 test('generated claims cannot cite a source the user did not select', async () => {
   await assert.rejects(generateDraft(input, {}, async () => ({ result: { title: '제목', body: '본문', claims: [{ text: '주장', sourceIds: ['other'] }], images: [], diagnostics: [] } })), /unselected source/);
 });
+
+test('generation applies the project prefix and keeps five suggested tags', async () => {
+  const result = await generateDraft({ ...input, projectName: 'PostGen' }, {}, async () => ({ result: { title: 'PostGen 검토 화면', tags: ['PostGen', '블로그', '검토', '원본', '초안'], body: '본문', headings: [], claims: [], images: [], diagnostics: [] } }));
+  assert.equal(result.draft.title, '[PostGen] 검토 화면');
+  assert.deepEqual(result.draft.tags, ['PostGen', '블로그', '검토', '원본', '초안']);
+});
