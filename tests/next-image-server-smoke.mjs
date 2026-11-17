@@ -33,13 +33,15 @@ try {
   fs.copyFileSync(path.resolve('tests/fixtures/postgen-editor-test.png'), candidate);
   const jobsFile = path.join(nextDir, 'jobs.json');
   const current = loadState(jobsFile);
-  saveState(recordImageCandidate(current, jobId, 'image-1', candidate, { provider: 'codex', known: true, inputTokens: 1, outputTokens: 1 }), current.revision, jobsFile);
+  saveState(recordImageCandidate(current, jobId, 'image-1', candidate, [{ usage: { provider: 'codex', known: true, inputTokens: 1, outputTokens: 1 }, imageUsage: { known: false }, check: null, checkUsage: null }]), current.revision, jobsFile);
   const preview = await api('/api/images/preview', { jobId, imageId: 'image-1' });
   if (!preview.dataUrl.startsWith('data:image/png;base64,')) throw new Error('Image candidate could not be previewed');
   await api('/api/images/confirm', { jobId, imageId: 'image-1', candidatePath: path.join(imageDir, 'wrong.png'), reviewed: true }, 400);
   const confirmed = await api('/api/images/confirm', { jobId, imageId: 'image-1', candidatePath: candidate, reviewed: true });
   const image = confirmed.state.jobs[0].draft.images[0];
   if (image.generatedPath !== candidate || image.afterParagraph !== 1 || !image.check.passed) throw new Error('Reviewed image was not attached to its paragraph');
+  const approvedPreview = await api('/api/images/preview', { jobId, imageId: 'image-1' });
+  if (!approvedPreview.dataUrl.startsWith('data:image/png;base64,')) throw new Error('Approved image is missing from final review');
   process.stdout.write('Image server smoke passed: split hosts, chart request, preview, candidate identity, visual confirmation, paragraph placement\n');
 } finally {
   child.kill();

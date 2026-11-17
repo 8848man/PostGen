@@ -55,6 +55,9 @@ textarea { resize: vertical; }
 button { background: #2061ba; color: white; border: 0; border-radius: 9px; padding: 11px 16px; font: inherit; font-weight: 700; cursor: pointer; width: max-content; }
 button:disabled { background: #9caec5; cursor: wait; }
 .image-preview { display: block; width: 100%; height: auto; margin: 14px 0; border: 1px solid #dce4dc; border-radius: 8px; }
+.image-review { margin: 16px 0; }
+.image-review-item { padding: 10px 0; border-top: 1px solid #dce4dc; }
+.image-review-item .image-preview { max-height: 320px; object-fit: contain; object-position: left center; }
 #message { display: block; position: sticky; bottom: 16px; margin-top: 16px; padding: 12px 16px; background: #18372d; color: #fff; border-radius: 10px; min-height: 20px; }
 #message:empty { display: none; }
 @media(max-width: 1100px) { .review-workspace { grid-template-columns: 1fr 1fr; } .review-column:last-child { grid-column: 1 / -1; } .review-column { min-height: 0; } }

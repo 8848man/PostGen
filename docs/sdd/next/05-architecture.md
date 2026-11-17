@@ -18,7 +18,7 @@
 
 PostGen 자체 MCP 서버는 Host Adapter의 추가 진입점으로 검토한다. 외부 커뮤니티 MCP 서버는 Publisher Adapter의 한 구현이다. 두 역할을 혼동하지 않는다. 게시 채널별 공식 API/MCP가 실제로 제공하는 예약 기능은 채널마다 검증한다. 사용자가 지정한 MCP 서버도 등록 가능하되 기능과 권한을 먼저 공개하고 서버별로 승인한다. 예약 기능이 없는 즉시 공개 도구는 자동 대체 호출하지 않는다.
 
-브라우저 Publisher Adapter는 기본적으로 PostGen 전용 Edge 프로필을 연다. 사용자가 실행 중인 Edge의 원격 디버깅을 직접 허용한 경우에만 로컬 CDP 연결을 선택할 수 있다. 이때 기존 탭은 건드리지 않고 기본 프로필에 새 편집기 탭을 열며, 계정과 승인본을 다시 읽어 확인한다. PostGen은 연결된 브라우저를 종료하거나 쿠키를 복사하지 않는다. 원격 주소는 허용하지 않는다. 로컬 CDP 연결 대상은 Edge 또는 Chrome이며(`/json/version`의 `Edg/`·`Chrome/`), 권장 경로는 전용 프로필(`D:\chrome-posting`)과 디버깅 포트 9333으로 띄운 포스팅용 크롬이다(N-014). 이 경로는 연결할 때마다 디버깅 허용을 묻지 않는다. 환경 변수는 `POSTGEN_BROWSER_CDP_ENDPOINT`(예전 이름 `POSTGEN_EDGE_CDP_ENDPOINT`도 읽음).
+실계정 네이버 포스팅은 바탕화면 `포스팅용 크롬.lnk`가 전용 프로필(`D:\chrome-posting`)과 로컬 디버깅 포트 9333으로 여는 크롬에 `next:chrome` 경로로 연결한다(N-014). 이 경로는 연결할 때마다 디버깅 허용을 묻지 않는다. `next`의 전용 Edge 프로필과 실행 중 Edge 연결은 대체 경로다. Edge 연결은 사용자가 원격 디버깅을 직접 허용해야 한다. 기존 탭은 건드리지 않고 새 편집기 탭에서 계정과 승인본을 다시 읽어 확인한다. PostGen은 연결된 브라우저를 종료하거나 쿠키를 복사하지 않는다. 원격 주소는 허용하지 않으며 로컬 CDP 대상은 Edge 또는 Chrome(`/json/version`의 `Edg/`·`Chrome/`)만 허용한다. 환경 변수는 `POSTGEN_BROWSER_CDP_ENDPOINT`(예전 이름 `POSTGEN_EDGE_CDP_ENDPOINT`도 읽음).
 
 ## 모델과 이미지
 

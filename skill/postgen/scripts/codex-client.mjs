@@ -45,7 +45,7 @@ export async function codexJson(prompt, schemaPath, options = {}) {
 export async function codexRun(prompt, schemaPath, options = {}) {
   const binary = resolveCodexBinary();
   const args = ['exec', '--ignore-user-config', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', '--json', '--output-schema', path.resolve(schemaPath)];
-  if (options.imagePath) args.push('--image', path.resolve(options.imagePath));
+  for (const imagePath of options.imagePaths || (options.imagePath ? [options.imagePath] : [])) args.push('--image', path.resolve(imagePath));
   args.push('-');
   const output = await new Promise((resolve, reject) => {
     const child = spawn(binary, args, { cwd: options.cwd || process.cwd(), shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });

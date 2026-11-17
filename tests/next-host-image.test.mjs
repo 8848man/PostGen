@@ -48,7 +48,7 @@ test('generated image remains a candidate until a person confirms it', () => {
   const id = state.jobs[0].id;
   state = setDraft(state, id, { title: 'title', body: 'body', images: [{ id: 'i1', afterParagraph: 1, description: 'scene' }] });
   state = approveImagePlan(state, id);
-  state = recordImageCandidate(state, id, 'i1', 'C:/managed/candidate.png', { provider: 'codex', known: true, inputTokens: 1, outputTokens: 1 });
+  state = recordImageCandidate(state, id, 'i1', 'C:/managed/candidate.png', [{ usage: { provider: 'codex', known: true, inputTokens: 1, outputTokens: 1 }, imageUsage: { known: false }, check: null, checkUsage: null }]);
   assert.equal(state.jobs[0].draft.images[0].generatedPath, undefined);
   assert.equal(state.jobs[0].draft.images[0].generationHistory.length, 1);
   assert.throws(() => confirmImageCandidate(state, id, 'i1', 'C:/managed/other.png'), /candidate changed/);
