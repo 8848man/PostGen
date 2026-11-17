@@ -6,13 +6,20 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { resolveAppRoot, resolveDataDir } from '../scripts/open-review.mjs';
 
-test('launcher prefers configured data and can use the merged review worktree from an older checkout', () => {
+test('launcher selects the current review API and never falls back to an older screen', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'postgen-launch-path-'));
   try {
-    const preview = path.join(dir, '.worktrees', 'review-dashboard', 'next', 'web');
+    const preview = path.join(dir, '.worktrees', 'image-placement-preview', 'next', 'web');
     fs.mkdirSync(preview, { recursive: true });
     fs.writeFileSync(path.join(preview, 'index.html'), '<section class="review-workspace">');
-    assert.equal(resolveAppRoot(dir), path.join(dir, '.worktrees', 'review-dashboard'));
+    fs.writeFileSync(path.join(preview, 'app.js'), "fetch('/api/publish-reservation')");
+    fs.writeFileSync(path.join(dir, '.worktrees', 'image-placement-preview', 'next', 'server.mjs'), "'/api/publish-reservation'");
+    assert.equal(resolveAppRoot(dir), path.join(dir, '.worktrees', 'image-placement-preview'));
+    fs.mkdirSync(path.join(dir, 'next', 'web'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'next', 'web', 'index.html'), '<section class="review-workspace">');
+    assert.equal(resolveAppRoot(dir), path.join(dir, '.worktrees', 'image-placement-preview'));
+    fs.rmSync(path.join(dir, '.worktrees'), { recursive: true, force: true });
+    assert.throws(() => resolveAppRoot(dir), /current image review screen/);
     assert.equal(resolveDataDir({ POSTGEN_DATA_DIR: dir }), dir);
     const priorData = path.join(dir, 'Documents', 'ChatGPT', 'new_sample', 'postgen-data');
     fs.mkdirSync(path.join(priorData, 'next'), { recursive: true });
