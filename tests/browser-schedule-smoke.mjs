@@ -1,4 +1,5 @@
 import { chromium } from 'playwright-core';
+import assert from 'node:assert/strict';
 import { configurePlatformReservation, seoulScheduleParts } from '../next/browser-adapter.mjs';
 
 const at = new Date(Date.now() + 48 * 60 * 60_000);
@@ -18,5 +19,8 @@ try {
   await page.locator('#mainFrame').evaluate((element, html) => { element.srcdoc = html; }, taggedFrame);
   const naver = await configurePlatformReservation(page, 'naver', at.toISOString(), ['PostGen', '글검토']);
   if (naver.localDate !== naverDate || !(await page.frameLocator('#mainFrame').locator('.tag_editor').innerText()).includes('글검토')) throw new Error('Naver dry run failed');
+  const misleadingFrame = frame.replace('<input id="open_public"', `<div class="tag_editor"><span>PostGen2</span><input placeholder="태그 입력" onkeydown="if(event.key==='Enter')this.value=''"></div><input id="open_public"`).replace('<input id="radio_time2"', '<label for="radio_time2">예약</label><input id="radio_time2"');
+  await page.locator('#mainFrame').evaluate((element, html) => { element.srcdoc = html; }, misleadingFrame);
+  await assert.rejects(configurePlatformReservation(page, 'naver', at.toISOString(), ['PostGen']), /not confirmed/);
   process.stdout.write('Browser reservation dry run passed: Naver and Tistory date, time, public/scheduled mode\n');
 } finally { await browser.close(); }

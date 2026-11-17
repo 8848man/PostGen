@@ -380,6 +380,39 @@ function monthSteps(currentYear, currentMonth, target) {
   if (steps < 0 || steps > 12) throw new Error('Publication date must be within the next 12 months');
   return steps;
 }
+async function naverTagItems(frame) {
+  // Read individual text nodes in the tag controls. A substring in another tag is not a confirmed tag.
+  return frame.locator('[class*="tag"]').evaluateAll(elements => {
+    const values = new Set();
+    for (const element of elements) {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const value = walker.currentNode.nodeValue.trim().replace(/^#/, '');
+        if (value) values.add(value);
+      }
+    }
+    return [...values];
+  });
+}
+
+export async function enterNaverTags(frame, page, tags) {
+  if (!tags.length) return [];
+  const tagInput = frame.locator('input[placeholder*="태그"], [class*="tag"] input').filter({ visible: true });
+  if (await tagInput.count() !== 1) throw new Error('Naver tag field is unavailable or ambiguous');
+  for (const tag of tags) {
+    await tagInput.fill(tag);
+    await tagInput.press('Enter');
+    let found = false;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if ((await naverTagItems(frame)).includes(tag) && !(await tagInput.inputValue()).trim()) { found = true; break; }
+      await page.waitForTimeout(100);
+    }
+    if (!found) throw new Error(`Naver tag was not confirmed: ${tag}`);
+  }
+  const registered = await naverTagItems(frame);
+  if (tags.some(tag => !registered.includes(tag))) throw new Error('Naver tag readback differs from approved draft');
+  return tags;
+}
 export async function configurePlatformReservation(page, channel, at, tags = []) {
   const target = seoulScheduleParts(at);
   if (dateTooSoon(at)) throw new Error('Publication time is too soon for safe reservation');
@@ -388,16 +421,7 @@ export async function configurePlatformReservation(page, channel, at, tags = [])
     const frame = page.frameLocator('iframe#mainFrame');
     // exact: the header also has a "예약 발행 N건" button that opens the reservation list instead of the publish panel.
     await frame.getByRole('button', { name: '발행', exact: true }).first().click();
-    if (tags.length) {
-      const tagInput = frame.locator('input[placeholder*="태그"], [class*="tag"] input').filter({ visible: true });
-      if (await tagInput.count() !== 1) throw new Error('Naver tag field is unavailable or ambiguous');
-      for (const tag of tags) {
-        await tagInput.fill(tag);
-        await tagInput.press('Enter');
-      }
-      const tagText = (await frame.locator('[class*="tag"]').allInnerTexts()).join(' ');
-      if (tags.some(tag => !tagText.includes(tag))) throw new Error('Naver tag readback differs from approved draft');
-    }
+    await enterNaverTags(frame, page, tags);
     await frame.locator('#open_public').check();
     // The radio input sits under its styled label, which intercepts pointer events.
     await frame.locator('label[for="radio_time2"]').click();
@@ -492,7 +516,7 @@ export async function recheckNaverReservation(job) {
   }
 }
 
-export async function submitPlatformReservation(sessionId, job) {
+export async function submitPlatformReservation(sessionId, job, beforeSubmit = async () => {}) {
   const session = sessions.get(sessionId);
   if (!session || session.jobId !== job.id || session.channel !== job.channel || session.accountHandle !== job.accountHandle) throw new Error('Editor session does not match approved account');
   const editor = await readEditorSession(sessionId);
@@ -510,9 +534,11 @@ export async function submitPlatformReservation(sessionId, job) {
     if (await buttons.count() !== 2) throw new Error('Naver final reservation button is ambiguous');
     // Read the list before submitting so an existing reservation with the same title and time cannot count as this one.
     listedBefore = naverReservationListCount(await readNaverReservationList(session.context, job.accountHandle), job.draft.title, job.schedule.at);
+    await beforeSubmit();
     await buttons.last().click();
   } else {
     if (await session.page.locator('#publish-btn').count() !== 1) throw new Error('Tistory final reservation button is ambiguous');
+    await beforeSubmit();
     await session.page.locator('#publish-btn').click();
   }
   const currentUrl = () => job.channel === 'naver' ? session.page.frames().find(frame => frame.name() === 'mainFrame')?.url() || session.page.url() : session.page.url();

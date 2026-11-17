@@ -64,12 +64,17 @@ async function registerBrowserReservation(jobId, sessionId) {
   const job = loadState().jobs.find(item => item.id === jobId);
   const account = loadRegistry().accounts.find(item => item.id === job?.accountId);
   if (job?.status !== 'ready_to_register' || !account) throw new Error('Approved editor content is not ready for reservation');
-  mutateState(current => beginScheduleSubmission(current, jobId));
+  let submitting = false;
   try {
-    const result = await submitPlatformReservation(sessionId, { ...job, channel: account.channel });
+    const result = await submitPlatformReservation(sessionId, { ...job, channel: account.channel }, async () => {
+      mutateState(current => beginScheduleSubmission(current, jobId));
+      submitting = true;
+    });
+    if (!submitting) throw new Error('Platform submission did not start');
     const state = result.verified ? mutateState(current => confirmPlatformSchedule(current, jobId, result)) : mutateState(current => markScheduleUnknown(current, jobId, result.reason));
     return { result, state };
   } catch (error) {
+    if (!submitting) return { result: { verified: false, reason: String(error.message).slice(0,300), notSubmitted: true }, state: loadState() };
     const state = mutateState(current => markScheduleUnknown(current, jobId, error.message));
     return { result: { verified: false, reason: String(error.message).slice(0,300) }, state };
   }
@@ -222,6 +227,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/prepare-mcp') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       if (job?.status !== 'preparing') throw new Error('Job is not preparing');
+      const account = loadRegistry().accounts.find(item => item.id === job.accountId);
+      if (account?.channel === 'naver' && job.draft.tags?.length) throw new Error('Naver posts with tags require browser preparation');
       const connector = loadConnectors().servers.find(item => item.id === input.connectorId);
       if (!connector) throw new Error('Unknown MCP connector');
       return json(res, 200, { result: await prepareWithMcp(connector, input.toolName, job) });
@@ -255,6 +262,8 @@ const server = http.createServer(async (req, res) => {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const connector = loadConnectors().servers.find(item => item.id === input.connectorId);
       if (job?.status !== 'ready_to_register' || !connector) throw new Error('Approved MCP reservation is not ready');
+      const account = loadRegistry().accounts.find(item => item.id === job.accountId);
+      if (account?.channel === 'naver' && job.draft.tags?.length) throw new Error('Naver posts with tags require browser registration to verify tags before publishing');
       mutateState(current => beginScheduleSubmission(current, job.id));
       try {
         const result = await registerScheduledWithMcp(connector, input.toolName, job);
