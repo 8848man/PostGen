@@ -19,8 +19,6 @@ const hasCurrentReviewScreen = root => {
 
 export function resolveAppRoot(root = projectRoot) {
   if (hasCurrentReviewScreen(root)) return root;
-  const previewRoot = path.join(root, '.worktrees', 'image-placement-preview');
-  if (hasCurrentReviewScreen(previewRoot)) return previewRoot;
   throw new Error('The current image review screen is unavailable. Update this checkout to the merged master branch.');
 }
 
