@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { dataDir } from './profile.mjs';
+import { cleanTags, projectNameForSources, projectTitle } from './post-metadata.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
@@ -19,7 +20,9 @@ export function validateState(state) {
   for (const job of state.jobs) {
     if (!nonempty(job.id, 80) || ids.has(job.id) || !nonempty(job.accountId, 80) || !nonempty(job.audience, 500) || !Array.isArray(job.sources) || !job.sources.length || !['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired','cancelled','failed','unknown'].includes(job.status)) throw new Error('Invalid job');
     if (job.sources.some(source => !nonempty(source.id, 80) || !nonempty(source.type, 40) || !nonempty(source.ref, 2048) || !(source.expired === true ? source.text === null : nonempty(source.text, 120_000)))) throw new Error('Invalid source snapshot');
+    if (job.projectName !== undefined && job.projectName !== null && !nonempty(job.projectName, 80)) throw new Error('Invalid project name');
     if (job.draft && (!nonempty(job.draft.title, 300) || !nonempty(job.draft.body) || !Array.isArray(job.draft.claims) || !Array.isArray(job.draft.images) || (job.draft.headings !== undefined && (!Array.isArray(job.draft.headings) || job.draft.headings.some(heading => !nonempty(heading, 300)))))) throw new Error('Invalid draft');
+    if (job.draft?.tags !== undefined) cleanTags(job.draft.tags);
     if (job.review && (!['rejected','improvement_requested'].includes(job.review.decision) || !nonempty(job.review.note, 2000) || !iso(job.review.at))) throw new Error('Invalid draft review');
     if (job.imageProvider !== undefined && !['manual', 'codex'].includes(job.imageProvider)) throw new Error('Invalid image host');
     if (['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired'].includes(job.status) && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
@@ -126,16 +129,16 @@ function change(state, id, allowed, apply) {
   return validateState(next);
 }
 
-export function createJob(state, { accountId, accountHandle = accountId, audience, goal, sources, model = 'codex', imageProvider = 'manual' }) {
+export function createJob(state, { accountId, accountHandle = accountId, audience, goal, sources, model = 'codex', imageProvider = 'manual', projectName = null }) {
   if (!nonempty(accountId, 80) || !nonempty(audience, 500) || !nonempty(goal, 500) || !Array.isArray(sources) || !sources.length) throw new Error('Account, audience, goal, and selected sources are required');
   const next = structuredClone(validateState(state));
   const now = new Date().toISOString();
-  next.jobs.push({ id: crypto.randomUUID(), campaignId: crypto.randomUUID(), accountId, accountHandle, audience, goal, model, imageProvider, sources, plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
+  next.jobs.push({ id: crypto.randomUUID(), campaignId: crypto.randomUUID(), accountId, accountHandle, audience, goal, model, imageProvider, projectName: projectName || projectNameForSources(sources), sources, plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
   next.revision++;
   return validateState(next);
 }
 
-export function createCampaign(state, { accounts, audience, sources, model = 'codex', imageProvider = 'manual' }) {
+export function createCampaign(state, { accounts, audience, sources, model = 'codex', imageProvider = 'manual', projectName = null }) {
   if (!Array.isArray(accounts) || !accounts.length || !Array.isArray(sources) || !sources.length || !nonempty(audience, 500)) throw new Error('Select accounts, audience, and sources');
   if (!['manual', 'codex'].includes(imageProvider)) throw new Error('Select a supported image host');
   const next = structuredClone(validateState(state)), now = new Date().toISOString(), campaignId = crypto.randomUUID();
@@ -143,7 +146,7 @@ export function createCampaign(state, { accounts, audience, sources, model = 'co
   for (const account of accounts) {
     if (!nonempty(account.id, 80) || !nonempty(account.handle, 200) || !nonempty(account.goal, 500) || uniqueAccounts.has(account.id)) throw new Error('Invalid campaign account');
     uniqueAccounts.add(account.id);
-    next.jobs.push({ id: crypto.randomUUID(), campaignId, accountId: account.id, accountHandle: account.handle, audience, goal: account.goal, model, imageProvider, sources: structuredClone(sources), plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
+    next.jobs.push({ id: crypto.randomUUID(), campaignId, accountId: account.id, accountHandle: account.handle, audience, goal: account.goal, model, imageProvider, projectName: projectName || projectNameForSources(sources), sources: structuredClone(sources), plan: null, status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
   }
   next.revision++;
   return validateState(next);
@@ -161,7 +164,8 @@ export function setCampaignPlan(state, campaignId, plan) {
 
 export function setDraft(state, id, draft, diagnostics = []) {
   return change(state, id, ['selected','draft'], job => {
-    job.draft = { title: draft.title, body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
+    if (!nonempty(draft?.title, 300)) throw new Error('Draft title is required');
+    job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags: cleanTags(draft.tags || []), body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
     job.review = null;
