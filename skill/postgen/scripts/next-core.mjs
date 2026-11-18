@@ -274,10 +274,27 @@ export function recordImageCandidate(state, id, imageId, pendingPath, attempts) 
     image.generationHistory = [...(image.generationHistory || []), ...attempts.map(attempt => ({ at: new Date().toISOString(), ...attempt }))];
   });
 }
+export function recordReplacementCandidate(state, id, imageId, previousPath, pendingPath, attempts) {
+  return change(state, id, ['draft'], job => {
+    if (!job.draft?.imagePlanApproved || job.imageProvider !== 'codex') throw new Error('Codex image plan is not approved');
+    const image = job.draft.images.find(item => item.id === imageId);
+    if (!image || (image.pendingPath || image.generatedPath) !== previousPath || !nonempty(pendingPath, 2048) || pendingPath === previousPath || !Array.isArray(attempts) || !attempts.length) throw new Error('Image changed; preview it again');
+    if (image.pendingPath && !image.generatedPath && !image.previousPendingPath) {
+      image.previousPendingPath = image.pendingPath;
+      image.previousPendingUsage = image.pendingUsage;
+      image.previousPendingCheck = image.pendingCheck;
+    }
+    image.pendingPath = pendingPath;
+    image.pendingUsage = attempts.at(-1).usage;
+    image.pendingCheck = attempts.at(-1).check;
+    image.generationAttempts = (image.generationAttempts || 0) + attempts.length;
+    image.generationHistory = [...(image.generationHistory || []), ...attempts.map(attempt => ({ at: new Date().toISOString(), ...attempt }))];
+  });
+}
 export function confirmImageCandidate(state, id, imageId, expectedPendingPath) {
   return change(state, id, ['draft'], job => {
     const image = job.draft?.images.find(item => item.id === imageId);
-    if (!image?.pendingPath || image.pendingPath !== expectedPendingPath || image.generatedPath) throw new Error('Image candidate changed; preview it again');
+    if (!image?.pendingPath || image.pendingPath !== expectedPendingPath) throw new Error('Image candidate changed; preview it again');
     connectImageCandidate(image, '사용자가 이미지를 확인함');
   });
 }
@@ -288,14 +305,26 @@ function connectImageCandidate(image, reason = '사용자의 최종 발행 선�
   delete image.pendingPath;
   delete image.pendingUsage;
   delete image.pendingCheck;
+  delete image.previousPendingPath;
+  delete image.previousPendingUsage;
+  delete image.previousPendingCheck;
 }
 export function discardImageCandidate(state, id, imageId, expectedPendingPath) {
   return change(state, id, ['draft'], job => {
     const image = job.draft?.images.find(item => item.id === imageId);
-    if (!image?.pendingPath || image.pendingPath !== expectedPendingPath || image.generatedPath) throw new Error('Image candidate changed; reload it before discarding');
-    delete image.pendingPath;
-    delete image.pendingUsage;
-    delete image.pendingCheck;
+    if (!image?.pendingPath || image.pendingPath !== expectedPendingPath) throw new Error('Image candidate changed; reload it before discarding');
+    if (image.previousPendingPath) {
+      image.pendingPath = image.previousPendingPath;
+      image.pendingUsage = image.previousPendingUsage;
+      image.pendingCheck = image.previousPendingCheck;
+      delete image.previousPendingPath;
+      delete image.previousPendingUsage;
+      delete image.previousPendingCheck;
+    } else {
+      delete image.pendingPath;
+      delete image.pendingUsage;
+      delete image.pendingCheck;
+    }
   });
 }
 export function acceptImageCheck(state, id, imageId) {
@@ -327,7 +356,7 @@ export function publishDraftReservation(state, id, at, { conflictAcknowledged = 
     for (const image of job.draft.images) {
       if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || image.afterParagraph > paragraphs.length || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and existing paragraph positions');
       if (!fs.existsSync(image.pendingPath || image.generatedPath || '')) throw new Error('Image file is missing; make the image again before publishing');
-      if (image.pendingPath && !image.generatedPath) connectImageCandidate(image);
+      if (image.pendingPath) connectImageCandidate(image);
       if (!image.generatedPath) throw new Error('Generate every selected image before publishing');
       if (image.check?.passed === false) image.check.manualAccepted = true;
       imageIds.add(image.id);
