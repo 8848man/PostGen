@@ -7,16 +7,19 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const reviewMarker = 'class="review-workspace"';
-const hasReviewScreen = root => {
+const hasCurrentReviewScreen = root => {
   const page = path.join(root, 'next', 'web', 'index.html');
-  return fs.existsSync(page) && fs.readFileSync(page, 'utf8').includes(reviewMarker);
+  const ui = path.join(root, 'next', 'web', 'app.js');
+  const server = path.join(root, 'next', 'server.mjs');
+  return fs.existsSync(page) && fs.existsSync(ui) && fs.existsSync(server)
+    && fs.readFileSync(page, 'utf8').includes(reviewMarker)
+    && fs.readFileSync(ui, 'utf8').includes('/api/publish-reservation')
+    && fs.readFileSync(server, 'utf8').includes('/api/publish-reservation');
 };
 
 export function resolveAppRoot(root = projectRoot) {
-  if (hasReviewScreen(root)) return root;
-  const previewRoot = path.join(root, '.worktrees', 'review-dashboard');
-  if (hasReviewScreen(previewRoot)) return previewRoot;
-  throw new Error('The three-step review screen is unavailable in this checkout. Update the project to the merged master branch.');
+  if (hasCurrentReviewScreen(root)) return root;
+  throw new Error('The current image review screen is unavailable. Update this checkout to the merged master branch.');
 }
 
 export function resolveDataDir(env = process.env, home = os.homedir()) {
@@ -29,7 +32,7 @@ export function resolveDataDir(env = process.env, home = os.homedir()) {
 export function startReview({ noBrowser = false, root = projectRoot, env = process.env } = {}) {
   const appRoot = resolveAppRoot(root);
   const dataDir = resolveDataDir(env);
-  const childEnv = { ...env, ...(dataDir ? { POSTGEN_DATA_DIR: dataDir } : {}) };
+  const childEnv = { ...env, ...(dataDir ? { POSTGEN_DATA_DIR: dataDir } : {}), POSTGEN_BROWSER_CDP_ENDPOINT: 'http://127.0.0.1:9333' };
   const server = spawn(process.execPath, [path.join(appRoot, 'next', 'server.mjs')], { cwd: appRoot, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let buffer = '';
   let opened = false;
@@ -47,8 +50,12 @@ export function startReview({ noBrowser = false, root = projectRoot, env = proce
     console.log('Keep this window open while using PostGen. Press Ctrl+C to stop.');
     if (noBrowser) return;
     if (process.platform !== 'win32') { console.error('Open the address above in a browser.'); return; }
-    const browser = spawn('explorer.exe', [url], { stdio: 'ignore', windowsHide: true });
-    browser.on('error', error => console.error(`Could not open browser: ${error.message}. Open the address above manually.`));
+    const shortcut = path.join(os.homedir(), 'Desktop', '포스팅용 크롬.lnk');
+    if (!fs.existsSync(shortcut)) { console.error(`Posting Chrome shortcut not found: ${shortcut}. Open the address above in posting Chrome.`); return; }
+    const quote = value => `'${value.replaceAll("'", "''")}'`;
+    const browser = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Start-Process -FilePath ${quote(shortcut)} -ArgumentList ${quote(url)} -WindowStyle Normal`], { stdio: 'ignore', windowsHide: true });
+    browser.on('error', error => console.error(`Could not open posting Chrome: ${error.message}. Open the address above manually.`));
+    browser.on('exit', code => { if (code) console.error(`Could not open posting Chrome (exit ${code}). Open the address above manually.`); });
     browser.unref();
   });
   server.stderr.on('data', part => process.stderr.write(part));

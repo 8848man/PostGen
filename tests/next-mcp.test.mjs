@@ -16,4 +16,7 @@ test('MCP tool list approval gates source reads and draft preparation', async ()
   const receipt = await registerScheduledWithMcp(config, 'schedule_post', job);
   assert.equal(receipt.remoteId, 'fixture-reservation');
   await assert.rejects(registerScheduledWithMcp(config, 'publish_now', job), /explicit scheduling tool/);
+  const taggedNaver = { ...job, channel: 'naver', draft: { ...job.draft, tags: ['PostGen'] } };
+  await assert.rejects(prepareWithMcp(config, 'prepare_draft', taggedNaver), /browser preparation/);
+  await assert.rejects(registerScheduledWithMcp(config, 'schedule_post', taggedNaver), /browser registration/);
 });
