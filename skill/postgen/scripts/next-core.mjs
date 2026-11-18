@@ -11,6 +11,7 @@ export const nextPath = () => path.join(process.env.POSTGEN_NEXT_DIR || path.joi
 export const emptyState = () => ({ schemaVersion: VERSION, revision: 0, jobs: [], retentionTrash: [] });
 const nonempty = (value, max = 100_000) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const iso = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
+export const hasDraftStandard = draft => !!(draft?.standard && nonempty(draft.standard.set, 120) && /^[0-9a-f]{64}$/.test(draft.standard.sha256));
 
 export function validateState(state) {
   if (state?.schemaVersion !== VERSION || !Number.isInteger(state.revision) || state.revision < 0 || !Array.isArray(state.jobs)) throw new Error('Invalid next state');
@@ -159,6 +160,25 @@ export function setCampaignPlan(state, campaignId, plan) {
   return validateState(next);
 }
 
+export function recordModelUsage(state, id, step, usage, { campaign = false, callId = crypto.randomUUID() } = {}) {
+  if (!['plan-and-draft','shared-plan','draft','evaluation'].includes(step)) throw new Error('Unknown model usage step');
+  const next = structuredClone(validateState(state));
+  const target = next.jobs.find(job => job.id === id);
+  if (!target) throw new Error('Unknown job');
+  const jobs = campaign ? next.jobs.filter(job => job.campaignId === target.campaignId) : [target];
+  const entry = { id: callId, at: new Date().toISOString(), step, usage: structuredClone(usage || { known: false, subscription: null, subscriptionReason: '사용량을 받지 못했습니다.' }) };
+  for (const job of jobs) { job.modelUsage = [...(job.modelUsage || []), structuredClone(entry)]; job.updatedAt = entry.at; }
+  next.revision++;
+  return validateState(next);
+}
+
+export function setDraftEvaluation(state, id, evaluation) {
+  return change(state, id, ['draft'], job => {
+    if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate before evaluation');
+    job.draft.evaluation = evaluation;
+  });
+}
+
 export function setDraft(state, id, draft, diagnostics = []) {
   return change(state, id, ['selected','draft'], job => {
     job.draft = { title: draft.title, body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
@@ -172,6 +192,7 @@ export function setDraft(state, id, draft, diagnostics = []) {
 export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
   return change(state, id, ['draft'], job => {
     if (!job.draft) throw new Error('Missing draft');
+    if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate with Assets Manager standard before review');
     const imageIds = new Set();
     const paragraphCount = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim()).length;
     for (const image of job.draft.images) { if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || image.afterParagraph > paragraphCount || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and existing paragraph positions'); imageIds.add(image.id); }
@@ -188,6 +209,7 @@ export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
 export function reviewDraft(state, id, decision, note) {
   if (!['rejected', 'improvement_requested'].includes(decision) || !nonempty(note, 2000)) throw new Error('A review reason is required');
   return change(state, id, ['draft', 'approved'], job => {
+    if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate with Assets Manager standard before review');
     job.review = { decision, note: note.trim(), at: new Date().toISOString(), draftRevision: job.draft.revision };
     job.approval = null;
     job.status = 'draft';
@@ -282,6 +304,7 @@ export function acceptImageCheck(state, id, imageId) {
 
 export function scheduleJob(state, id, at, now = new Date()) {
   return change(state, id, ['approved'], job => {
+    if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate before scheduling');
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
     job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
     job.registration = null;
@@ -294,6 +317,7 @@ export function publishDraftReservation(state, id, at, { conflictAcknowledged = 
   return change(state, id, ['draft'], job => {
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
     if (!job.draft) throw new Error('Missing draft');
+    if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate with Assets Manager standard before publishing');
     const paragraphs = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
     const imageIds = new Set();
     for (const image of job.draft.images) {

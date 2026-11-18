@@ -7,10 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { evaluateDraft } from './evaluate.mjs';
-import { loadAssetsStandard, standardRecord, imageRequest } from './assets-standard.mjs';
+import { assetsStandardConfig, loadAssetsStandard, standardRecord, imageRequest } from './assets-standard.mjs';
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, importGeneratedImage, previewGeneratedImage, discardGeneratedImage } from './images.mjs';
@@ -125,22 +125,38 @@ const server = http.createServer(async (req, res) => {
       const sample = resolveAccount(registry, account.channel, account.handle).sample;
       const modelOptions = { provider: input.provider || job.model, model: input.model };
       if (!['codex', 'claude'].includes(modelOptions.provider)) throw new Error('Direct API generation is disabled; use Codex or Claude Code');
+      const assetsConfig = assetsStandardConfig();
+      if (!assetsConfig.cli || !assetsConfig.sets[account.channel]) throw new Error('Configure POSTGEN_ASSETS_CLI and an Assets Manager set before generating a reviewable draft');
       const usageEntries = [];
-      if (!job.plan) { const planned = await generatePlan(job.sources, modelOptions); usageEntries.push({ step: 'plan', usage: planned.usage }); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
-      // The user's Assets Manager standard (if configured) is loaded per draft; the task is the shared plan's angle,
+      const shared = current.jobs.filter(item => item.campaignId === job.campaignId).length > 1;
+      if (shared && !job.plan) { let planned; try { planned = await generatePlan(job.sources, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, 'shared-plan', error.usage, { campaign: true })); throw error; } usageEntries.push({ step: 'shared-plan', usage: planned.usage }); mutateState(latest => recordModelUsage(latest, job.id, 'shared-plan', planned.usage, { campaign: true })); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
+      // The user's Assets Manager standard is loaded per draft; the task is the shared plan's angle,
       // so the library can also pick related past outputs as examples.
       const standard = await loadAssetsStandard({ channel: account.channel, task: `${account.channel === 'naver' ? '네이버' : account.channel} 블로그 포스트: ${job.plan?.angle || job.audience}` });
       const revisionRequest = job.review && job.draft ? { decision: job.review.decision, note: job.review.note, previousTitle: job.draft.title, previousBody: job.draft.body.slice(0, 12_000), previousBodyTruncated: job.draft.body.length > 12_000 } : null;
       const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan, standard, revisionRequest };
-      const output = await generateDraft(generationInput, modelOptions);
+      const step = shared ? 'draft' : 'plan-and-draft';
+      let output; try { output = await generateDraft(generationInput, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, step, error.usage)); throw error; }
       output.draft.standard = standardRecord(standard);
-      usageEntries.push({ step: 'draft', usage: output.usage });
-      let evaluation = null;
-      try { const evaluated = await evaluateDraft({ draft: output.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources, standardChecks: standard?.checks || [], standardText: standard?.text || '' }, modelOptions); evaluation = evaluated.evaluation; usageEntries.push({ step: 'evaluation', usage: evaluated.usage }); }
-      catch (error) { usageEntries.push({ step: 'evaluation', usage: null }); output.diagnostics.push({ code: 'evaluation_unavailable', message: String(error.message).slice(0,200) }); }
-      output.draft.evaluation = evaluation;
+      usageEntries.push({ step, usage: output.usage });
+      mutateState(latest => recordModelUsage(latest, job.id, step, output.usage));
       const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics));
       const usage = summarizeUsage(usageEntries);
+      return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
+    }
+    if (url.pathname === '/api/evaluate') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      if (job?.status !== 'draft' || !job.draft?.standard?.sha256) throw new Error('Draft with applied standard is required for evaluation');
+      const registry = loadRegistry(), account = registry.accounts.find(item => item.id === job.accountId);
+      if (!account) throw new Error('Account no longer exists');
+      const standard = await loadAssetsStandard({ channel: account.channel, task: `${account.channel} 블로그 포스트: ${job.plan?.angle || job.audience}` });
+      if (!standard || standard.sha256 !== job.draft.standard.sha256) throw new Error('Assets Manager standard changed; regenerate the draft before evaluation');
+      const sample = resolveAccount(registry, account.channel, account.handle).sample;
+      const modelOptions = { provider: input.provider || job.model, model: input.model };
+      let evaluated; try { evaluated = await evaluateDraft({ draft: job.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources, standardChecks: standard.checks, standardText: standard.text }, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, 'evaluation', error.usage)); throw error; }
+      mutateState(latest => recordModelUsage(latest, job.id, 'evaluation', evaluated.usage));
+      const state = mutateState(latest => setDraftEvaluation(latest, job.id, evaluated.evaluation));
+      const usage = summarizeUsage([{ step: 'evaluation', usage: evaluated.usage }]);
       return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
     }
     if (url.pathname === '/api/images/request') {
@@ -149,16 +165,17 @@ const server = http.createServer(async (req, res) => {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const image = job?.draft?.images.find(item => item.id === input.imageId);
       if (!image) throw new Error('Unknown image');
-      return json(res, 200, { request: imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description }) });
+      return json(res, 200, { request: imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description, kind: image.kind }) });
     }
     if (url.pathname === '/api/draft/lock') return json(res, 200, { lock: acquireDraftLock(input.jobId) });
     if (url.pathname === '/api/draft/unlock') return json(res, 200, { released: releaseDraftLock(input.jobId, input.token) });
     if (url.pathname === '/api/draft') {
       const existingJob = loadState().jobs.find(item => item.id === input.jobId);
       if (!existingJob) throw new Error('Unknown job');
+      if (existingJob.status !== 'draft') throw new Error('Only an existing draft can be edited');
       if (existingJob.status === 'draft' && (!input.lockToken || !Number.isInteger(input.expectedDraftRevision))) throw new Error('Draft edit lock and revision required');
       const options = existingJob.status === 'draft' ? { draftLockToken: input.lockToken, expectedDraftRevision: input.expectedDraftRevision } : undefined;
-      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, input.draft, input.diagnostics || []), options) });
+      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, { ...input.draft, standard: existingJob.draft?.standard || null }, input.diagnostics || []), options) });
     }
     if (url.pathname === '/api/images/approve-plan') {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');
@@ -176,7 +193,7 @@ const server = http.createServer(async (req, res) => {
       if (remaining <= 0) throw new Error('Image generation attempt limit reached');
       const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
       if (image.assetId && !asset) throw new Error('Selected asset unavailable');
-      const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description });
+      const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description, kind: image.kind });
       const result = await runImageAttempts({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description }, { remaining, autoCheck: settings.autoImageCheck });
       let state;
       try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, result.storedPath, result.attempts)); }

@@ -40,11 +40,37 @@ export function standardChecks(text) {
   return String(text).split('\n').map(line => line.match(/^- \[ \] (.+)$/)?.[1]?.trim()).filter(Boolean);
 }
 
+export function chartReference(text) {
+  const rule = String(text).split('\n').find(line => /^- \*\*차트·도식 스타일\*\*:/.test(line));
+  const match = rule?.match(/\[(\d+)\] ([^\s,()]+?\.(?:png|jpe?g|webp))/i);
+  if (match) return { index: match[1], name: match[2], rule: rule.replace(/^- \*\*차트·도식 스타일\*\*: /, '') };
+  const referenceLine = (imageRequestTemplate(text) || String(text)).split('\n').find(line => line.startsWith('- 참조 이미지로 첨부:'));
+  const templateMatch = referenceLine?.match(/\[(\d+)\] ([^\s,()]+?\.(?:png|jpe?g|webp)) \([^)]*차트·도식[^)]*\)/i);
+  return templateMatch ? { index: templateMatch[1], name: templateMatch[2], rule: null } : null;
+}
+
+function imageKind(kind, scene) {
+  if (['chart', 'diagram', 'illustration'].includes(kind)) return kind;
+  return /차트|그래프|도식|흐름도|매트릭스|다이어그램|graph|chart|diagram|flowchart/i.test(scene) ? 'diagram' : 'illustration';
+}
+
 // Fill one ImageGen request: the library's template with the position and scene, plus absolute reference paths.
-export function imageRequest(standard, { position, scene }) {
+export function imageRequest(standard, { position, scene, kind }) {
   const template = standard?.imageTemplate;
   if (!template) return null;
-  const filled = template.replace('<들어갈 자리>', position).replace(/^- 장면: .*$/m, `- 장면: ${scene}`);
+  const chart = imageKind(kind, scene) !== 'illustration';
+  const graph = standard.chartReference || chartReference(template);
+  if (chart && !graph) throw new Error('Assets Manager standard has no chart/diagram reference');
+  let filled = template.replace('<들어갈 자리>', position).replace(/^(- 장면(?: 또는 내용)?: ).*$/m, (_, prefix) => `${prefix}${scene}`);
+  const referenceLine = filled.split('\n').find(line => line.startsWith('- 참조 이미지로 첨부:'));
+  if (chart) {
+    filled = filled.replace(/^- 참조 이미지로 첨부: .*$/m, `- 참조 이미지로 첨부: [${graph.index}] ${graph.name} (차트·도식 원본)`)
+      .replace(/^- 원본과 다르게 할 점: .*\n?/m, '')
+      .replace(/^- 지시: .*$/m, `- 지시: ${graph.rule || '첨부한 차트·도식 원본의 형태를 따르세요.'} 장면의 데이터와 라벨을 정확히 반영하세요.`);
+  } else if (graph && referenceLine) {
+    const graphEntry = new RegExp(`\\[${graph.index}\\] ${graph.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\([^)]*\\)(?:, )?`);
+    filled = filled.replace(referenceLine, referenceLine.replace(graphEntry, '').replace(/, $/, ''));
+  }
   const refs = [...new Set([...filled.matchAll(/\[(\d+)\] ([^\s,()]+)/g)].map(match => match[2]))];
   const paths = refs.map(name => standard.files.find(file => path.basename(file) === name)).filter(Boolean);
   return { text: filled, referencePaths: paths };
@@ -61,6 +87,7 @@ export function parseStandard(raw, expectedSet) {
     text: result.text,
     files,
     imageTemplate: imageRequestTemplate(result.text),
+    chartReference: chartReference(result.text),
     checks: standardChecks(result.text)
   };
 }
@@ -77,5 +104,5 @@ export async function loadAssetsStandard({ channel, task }, config = assetsStand
 
 // What the draft keeps: enough to trace which standard wrote it, not the whole prompt.
 export function standardRecord(standard) {
-  return standard ? { set: standard.set, title: standard.title, sha256: standard.sha256, files: standard.files, imageTemplate: standard.imageTemplate } : null;
+  return standard ? { set: standard.set, title: standard.title, sha256: standard.sha256, files: standard.files, imageTemplate: standard.imageTemplate, chartReference: standard.chartReference } : null;
 }
