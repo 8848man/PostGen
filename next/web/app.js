@@ -29,7 +29,20 @@ async function api(path, data) {
   return result;
 }
 function say(text, durationMs = 7000) { message.textContent = text; setTimeout(() => { if (message.textContent === text) message.textContent = ''; }, durationMs); }
-function button(label, action) { const element = document.createElement('button'); element.textContent = label; element.type = 'button'; element.onclick = async () => { element.disabled = true; try { await action(); await refresh(); } catch (error) { say(error.message); } finally { element.disabled = false; } }; return element; }
+function button(label, action, blockedReason = null) {
+  const element = document.createElement('button'); element.textContent = label; element.type = 'button';
+  let running = false;
+  element.onclick = async () => {
+    if (running) return say(`${label} 작업이 진행 중입니다. 완료될 때까지 기다려 주세요.`);
+    const reason = typeof blockedReason === 'function' ? blockedReason() : blockedReason;
+    if (reason) return say(reason);
+    running = true;
+    try { await action(); await refresh(); }
+    catch (error) { say(error.message); }
+    finally { running = false; }
+  };
+  return element;
+}
 function imageRevisionDialog() {
   return new Promise(resolve => {
     const dialog = document.createElement('dialog'); dialog.className = 'image-revision-dialog'; dialog.setAttribute('aria-label', '이 이미지 재생성');
@@ -145,8 +158,7 @@ async function refresh() {
             say('이전 이미지를 첨부해 재생성 중입니다. 호스트 응답을 기다려 주세요.', 300_000);
             const result = await api('/api/images/regenerate', { jobId: job.id, imageId: image.id, previousPath: image.pendingPath || image.generatedPath, instructions });
             say(`새 이미지 후보가 준비됐습니다. ${result.attempts}회 생성 · 미리 본 뒤 발행하거나 후보를 버리세요.`, 60_000);
-          });
-          if ((image.generationAttempts || 0) >= cache.settings.maxImageGenerations) { regenerate.disabled = true; regenerate.title = '설정한 이미지 생성 시도 한도에 도달했습니다.'; }
+          }, () => (image.generationAttempts || 0) >= cache.settings.maxImageGenerations ? `이 이미지는 생성 시도 한도 ${cache.settings.maxImageGenerations}회에 도달했습니다. 설정에서 한도를 늘린 뒤 다시 시도하세요.` : null);
           block.append(regenerate);
         }
         if (job.status === 'draft' && !image.generatedPath) {
@@ -182,8 +194,7 @@ async function refresh() {
         await api(job.status === 'draft' ? '/api/publish-reservation' : '/api/schedule', { jobId: job.id, at, conflictAcknowledged: conflict?.checked === true });
         await api('/api/start', { jobId: job.id });
         await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
-      });
-      publish.disabled = missing > 0 || !hasDraftStandard(job);
+      }, () => !hasDraftStandard(job) ? 'Assets Manager 지침 적용 기록이 없어 발행할 수 없습니다. 표준을 연결하고 초안을 다시 생성하세요.' : missing > 0 ? `이미지 ${missing}장을 아직 만들지 않아 발행할 수 없습니다. 이미지를 만들거나 제안을 제외하세요.` : null);
       row.append(time);
       if (job.status === 'draft' && missing) row.append(button('이미지 만들기', async () => {
         if (job.imageProvider !== 'codex') await api('/api/images/provider', { jobId: job.id, provider: 'codex' });
@@ -193,7 +204,7 @@ async function refresh() {
         say(`${remaining.length}개 이미지가 준비됐습니다. 확인한 뒤 발행하세요.`, 60_000);
       }));
       row.append(publish); panel.append(row);
-      const hint = document.createElement('p'); hint.textContent = missing ? `이미지 ${missing}장을 먼저 만드세요.` : '이미지마다 승인할 필요 없이 발행 한 번으로 진행합니다.'; panel.append(hint);
+      const hint = document.createElement('p'); hint.textContent = !hasDraftStandard(job) ? 'Assets Manager 지침 적용 기록이 없습니다. 표준을 연결하고 초안을 다시 생성하세요.' : missing ? `이미지 ${missing}장을 먼저 만드세요.` : '이미지마다 승인할 필요 없이 발행 한 번으로 진행합니다.'; panel.append(hint);
       if (job.diagnostics?.some(item => item.code === 'source_conflict')) { const label = document.createElement('label'); conflict = document.createElement('input'); conflict.type = 'checkbox'; label.append(conflict, ' 출처 충돌을 확인했습니다'); panel.append(label); }
       article.append(panel);
     }
