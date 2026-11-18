@@ -60,6 +60,11 @@ button:disabled { background: #9caec5; cursor: wait; }
 .image-review-item .image-preview { max-height: 320px; object-fit: contain; object-position: left center; }
 .image-placement { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 .image-placement select { flex: 1; min-width: 0; }
+.image-revision-dialog { width: min(560px, calc(100vw - 32px)); padding: 22px; border: 1px solid #aebed2; border-radius: 14px; }
+.image-revision-dialog::backdrop { background: rgba(14, 30, 48, .55); }
+.image-revision-dialog h3 { margin: 0 0 8px; }
+.image-revision-dialog textarea { margin-top: 8px; }
+.image-revision-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .publish-panel { padding: 18px; margin: 18px 0; border: 1px solid #9bb8e8; border-radius: 14px; background: #edf4ff; }
 .publish-panel h4 { margin: 0 0 8px; font-size: 20px; }
 .publish-panel p { margin: 8px 0; line-height: 1.5; }

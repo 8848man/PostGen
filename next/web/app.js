@@ -30,6 +30,22 @@ async function api(path, data) {
 }
 function say(text, durationMs = 7000) { message.textContent = text; setTimeout(() => { if (message.textContent === text) message.textContent = ''; }, durationMs); }
 function button(label, action) { const element = document.createElement('button'); element.textContent = label; element.type = 'button'; element.onclick = async () => { element.disabled = true; try { await action(); await refresh(); } catch (error) { say(error.message); } finally { element.disabled = false; } }; return element; }
+function imageRevisionDialog() {
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog'); dialog.className = 'image-revision-dialog'; dialog.setAttribute('aria-label', '이 이미지 재생성');
+    const form = document.createElement('form'); form.method = 'dialog';
+    const title = document.createElement('h3'); title.textContent = '이 이미지 재생성';
+    const note = document.createElement('p'); note.textContent = '현재 이미지를 스타일 원본과 별도로 첨부합니다. 바꿀 부분을 적으세요. 새 후보를 확인하기 전까지 이전 이미지는 유지됩니다.';
+    const label = document.createElement('label'); label.textContent = '추가 지침';
+    const input = document.createElement('textarea'); input.required = true; input.maxLength = 2000; input.rows = 5; input.placeholder = '예: 인물의 자세를 바꾸고 배경의 글자는 제거해 주세요.'; label.append(input);
+    const actions = document.createElement('div'); actions.className = 'image-revision-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '취소'; cancel.onclick = () => dialog.close();
+    const submit = document.createElement('button'); submit.type = 'submit'; submit.value = 'regenerate'; submit.textContent = '재생성';
+    actions.append(cancel, submit); form.append(title, note, label, actions); dialog.append(form); document.body.append(dialog);
+    dialog.addEventListener('close', () => { const value = dialog.returnValue === 'regenerate' ? input.value.trim() : null; dialog.remove(); resolve(value); }, { once: true });
+    dialog.showModal(); input.focus();
+  });
+}
 async function registerBrowser(jobId, sessionId) {
   const output = await api('/api/registration/browser', { jobId, sessionId });
   say(output.result.verified ? '플랫폼 예약 등록을 확인했습니다.' : output.result.notSubmitted ? `태그나 발행 설정을 확인하지 못해 발행 버튼을 누르지 않았습니다: ${output.result.reason}` : `예약 결과를 확인할 수 없습니다. 플랫폼에서 중복 등록 여부를 확인하세요: ${output.result.reason}`);
@@ -103,7 +119,7 @@ async function refresh() {
       const paragraphs = job.draft.body.replace(/\r\n/g, '\n').split('\n').map(line => line.trim()).filter(Boolean);
       for (const image of job.draft.images) {
         const block = document.createElement('div'); block.className = 'image-review-item';
-        const label = document.createElement('p'); label.textContent = `본문 ${image.afterParagraph}번째 문단 뒤 · ${image.generatedPath ? '연결됨' : image.pendingPath ? '후보 검수 필요' : '생성 전'} · ${image.description}`; block.append(label);
+        const label = document.createElement('p'); label.textContent = `본문 ${image.afterParagraph}번째 문단 뒤 · ${image.pendingPath ? '후보 검수 필요' : image.generatedPath ? '연결됨' : '생성 전'} · ${image.description}`; block.append(label);
         if (job.status === 'draft') {
           const placement = document.createElement('div'); placement.className = 'image-placement';
           const select = document.createElement('select'); select.setAttribute('aria-label', `${image.description} 배치 위치`);
@@ -112,7 +128,8 @@ async function refresh() {
           placement.append(select);
           block.append(placement);
         }
-        if (image.check?.passed === false) { const check = document.createElement('p'); check.textContent = `자동 점검 실패: ${image.check.reason}${image.check.manualAccepted ? ' · 수동 승인됨' : ''}`; block.append(check); }
+        const visibleCheck = image.pendingPath ? image.pendingCheck : image.check;
+        if (visibleCheck?.passed === false) { const check = document.createElement('p'); check.textContent = `자동 점검 실패: ${visibleCheck.reason}${visibleCheck.manualAccepted ? ' · 수동 승인됨' : ''}`; block.append(check); }
         if (image.generatedPath || image.pendingPath) {
           try {
             const preview = await api('/api/images/preview', { jobId: job.id, imageId: image.id });
@@ -120,11 +137,29 @@ async function refresh() {
           }
           catch { const error = document.createElement('p'); error.textContent = '이미지를 불러오지 못했습니다. 파일을 확인하세요.'; block.append(error); }
         }
+        if (job.status === 'draft' && (image.pendingPath || image.generatedPath)) {
+          const regenerate = button('이 이미지 재생성', async () => {
+            const instructions = await imageRevisionDialog(); if (!instructions) return;
+            if (job.imageProvider !== 'codex') await api('/api/images/provider', { jobId: job.id, provider: 'codex' });
+            if (!job.draft.imagePlanApproved) await api('/api/images/approve-plan', { jobId: job.id });
+            say('이전 이미지를 첨부해 재생성 중입니다. 호스트 응답을 기다려 주세요.', 300_000);
+            const result = await api('/api/images/regenerate', { jobId: job.id, imageId: image.id, previousPath: image.pendingPath || image.generatedPath, instructions });
+            say(`새 이미지 후보가 준비됐습니다. ${result.attempts}회 생성 · 미리 본 뒤 발행하거나 후보를 버리세요.`, 60_000);
+          });
+          if ((image.generationAttempts || 0) >= cache.settings.maxImageGenerations) { regenerate.disabled = true; regenerate.title = '설정한 이미지 생성 시도 한도에 도달했습니다.'; }
+          block.append(regenerate);
+        }
         if (job.status === 'draft' && !image.generatedPath) {
           const options = document.createElement('details'); options.className = 'image-options';
           const summary = document.createElement('summary'); summary.textContent = '이미지 옵션'; options.append(summary);
-          if (image.pendingPath) options.append(button('다시 만들기', async () => { await api('/api/images/discard', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath }); say('후보를 버렸습니다. 이미지 만들기를 눌러 새 후보를 생성하세요.'); }));
+          if (image.pendingPath) options.append(button('후보 버리기', async () => { await api('/api/images/discard', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath }); say('후보를 버렸습니다.'); }));
           else options.append(button('이 제안 제외', async () => api('/api/images/remove', { jobId: job.id, imageId: image.id })));
+          block.append(options);
+        }
+        if (job.status === 'draft' && image.pendingPath && image.generatedPath) {
+          const options = document.createElement('details'); options.className = 'image-options';
+          const summary = document.createElement('summary'); summary.textContent = '이미지 옵션'; options.append(summary);
+          options.append(button('새 후보 버리고 이전 이미지 유지', async () => api('/api/images/discard', { jobId: job.id, imageId: image.id, candidatePath: image.pendingPath })));
           block.append(options);
         }
         imageReview.append(block);

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { projectNameForSources } from './post-metadata.mjs';
 import { evaluateDraft } from './evaluate.mjs';
@@ -204,6 +204,30 @@ const server = http.createServer(async (req, res) => {
       let state;
       try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, result.storedPath, result.attempts)); }
       catch (error) { await discardGeneratedImage(result.storedPath); throw error; }
+      const last = result.attempts.at(-1);
+      return json(res, 200, { state, usage: last.usage, imageUsage: last.imageUsage, check: last.check, attempts: result.attempts.length });
+    }
+    if (url.pathname === '/api/images/regenerate') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      const image = job?.draft?.images.find(item => item.id === input.imageId);
+      const previousPath = image?.pendingPath || image?.generatedPath;
+      const instructions = input.instructions?.trim();
+      if (job?.status !== 'draft' || job.imageProvider !== 'codex' || !job.draft.imagePlanApproved || !previousPath || previousPath !== input.previousPath) throw new Error('Image changed; preview it again');
+      if (typeof instructions !== 'string' || !instructions || instructions.length > 2000) throw new Error('Enter image changes in 2,000 characters or less');
+      const settings = loadSettings();
+      const remaining = settings.maxImageGenerations - (image.generationAttempts || 0);
+      if (remaining <= 0) throw new Error('Image generation attempt limit reached');
+      const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
+      if (image.assetId && !asset) throw new Error('Selected asset unavailable');
+      const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description, kind: image.kind });
+      const referencePaths = [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])];
+      if (new Set([...referencePaths, previousPath]).size > 5) throw new Error('Image attachments exceed the five-image host limit');
+      const result = await runImageAttempts({ request, referencePaths, scene: image.description, previousImagePath: previousPath, revisionInstructions: instructions }, { remaining, autoCheck: settings.autoImageCheck });
+      let state;
+      const attempts = result.attempts.map(attempt => ({ ...attempt, revisionInstructions: instructions }));
+      try { state = mutateState(current => recordReplacementCandidate(current, job.id, image.id, previousPath, result.storedPath, attempts)); }
+      catch (error) { await discardGeneratedImage(result.storedPath); throw error; }
+      if (image.pendingPath && (image.generatedPath || image.previousPendingPath)) await discardGeneratedImage(image.pendingPath).catch(error => console.warn(`Superseded image cleanup failed: ${error.message}`));
       const last = result.attempts.at(-1);
       return json(res, 200, { state, usage: last.usage, imageUsage: last.imageUsage, check: last.check, attempts: result.attempts.length });
     }
