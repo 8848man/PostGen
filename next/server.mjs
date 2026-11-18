@@ -260,7 +260,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/images/accept-check') return json(res, 200, { state: mutateState(current => acceptImageCheck(current, input.jobId, input.imageId)) });
     if (url.pathname === '/api/approve') return json(res, 200, { state: mutateState(current => approveDraft(current, input.jobId, { conflictAcknowledged: input.conflictAcknowledged === true })) });
-    if (url.pathname === '/api/publish-reservation') return json(res, 200, { state: mutateState(current => publishDraftReservation(current, input.jobId, input.at, { conflictAcknowledged: input.conflictAcknowledged === true })) });
+    if (url.pathname === '/api/publish-reservation') return json(res, 200, { state: mutateState(current => publishDraftReservation(current, input.jobId, input.at, { conflictAcknowledged: input.conflictAcknowledged === true, standardUnverifiedAcknowledged: input.standardUnverifiedAcknowledged === true })) });
     if (url.pathname === '/api/draft/review') return json(res, 200, { state: mutateState(current => reviewDraft(current, input.jobId, input.decision, input.note)) });
     if (url.pathname === '/api/schedule') return json(res, 200, { state: mutateState(current => scheduleJob(current, input.jobId, input.at)) });
     if (url.pathname === '/api/reschedule') return json(res, 200, { state: mutateState(current => rescheduleExpired(current, input.jobId, input.at, { factsAndLinksReviewed: input.factsAndLinksReviewed === true })) });

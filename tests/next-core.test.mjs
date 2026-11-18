@@ -10,13 +10,18 @@ const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'ima
 const standard = { set: 'naver-blog-post', sha256: 'a'.repeat(64) };
 const setDraft = (state, id, value, diagnostics) => saveDraft(state, id, { ...value, standard }, diagnostics);
 
-test('drafts without applied standard cannot enter normal review or publication', () => {
+test('drafts without applied standard require explicit confirmation for publication', () => {
   const state = createJob(emptyState(), { accountId: 'a', audience: '독자', goal: '설명', sources: [source] });
   const id = state.jobs[0].id;
   const missing = saveDraft(state, id, { title: '제목', body: '본문', claims: [], images: [] });
   assert.throws(() => reviewDraft(missing, id, 'rejected', '다시 작성'), /standard record is missing/);
   assert.throws(() => approveDraft(missing, id), /standard record is missing/);
-  assert.throws(() => publishDraftReservation(missing, id, '2026-11-20T00:00:00Z', {}, new Date('2026-11-18T00:00:00Z')), /standard record is missing/);
+  const now = new Date('2026-11-18T00:00:00Z'), at = '2026-11-20T00:00:00Z';
+  assert.throws(() => publishDraftReservation(missing, id, at, {}, now), /explicit publication confirmation/);
+  const published = publishDraftReservation(missing, id, at, { standardUnverifiedAcknowledged: true }, now);
+  assert.equal(published.jobs[0].status, 'awaiting_registration');
+  assert.equal(published.jobs[0].approval.standardUnverifiedAcknowledged, true);
+  assert.equal(published.jobs[0].draft.standard, null);
 });
 
 test('model calls persist by job and shared call ID can be deduplicated for campaign totals', () => {

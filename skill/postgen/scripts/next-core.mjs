@@ -346,11 +346,12 @@ export function scheduleJob(state, id, at, now = new Date()) {
 }
 
 // One final action accepts visible image candidates, approves the draft, and starts reservation preparation.
-export function publishDraftReservation(state, id, at, { conflictAcknowledged = false } = {}, now = new Date()) {
+export function publishDraftReservation(state, id, at, { conflictAcknowledged = false, standardUnverifiedAcknowledged = false } = {}, now = new Date()) {
   return change(state, id, ['draft'], job => {
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
     if (!job.draft) throw new Error('Missing draft');
-    if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate with Assets Manager standard before publishing');
+    const standardUnverified = !hasDraftStandard(job.draft);
+    if (standardUnverified && !standardUnverifiedAcknowledged) throw new Error('Unverified draft standard requires explicit publication confirmation');
     const paragraphs = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
     const imageIds = new Set();
     for (const image of job.draft.images) {
@@ -365,7 +366,7 @@ export function publishDraftReservation(state, id, at, { conflictAcknowledged = 
     const bodyLines = job.draft.body.split('\n').map(line => line.trim());
     for (const heading of job.draft.headings || []) if (bodyLines.filter(line => line === heading).length !== 1) throw new Error('Each heading must match one unique body line');
     if (job.diagnostics.some(item => item.code === 'source_conflict') && !conflictAcknowledged) throw new Error('Source conflict needs explicit acknowledgement');
-    job.approval = { at: now.toISOString(), draftRevision: job.draft.revision, conflictAcknowledged };
+    job.approval = { at: now.toISOString(), draftRevision: job.draft.revision, conflictAcknowledged, ...(standardUnverified ? { standardUnverifiedAcknowledged: true } : {}) };
     job.review = null;
     job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
     job.registration = null;
@@ -377,7 +378,7 @@ export function rescheduleExpired(state, id, at, { factsAndLinksReviewed = false
   return change(state, id, ['expired'], job => {
     if (!factsAndLinksReviewed) throw new Error('Facts and links need a new review');
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
-    job.approval = { at: now.toISOString(), draftRevision: job.draft.revision, factsAndLinksReviewed: true, conflictAcknowledged: job.approval.conflictAcknowledged };
+    job.approval = { at: now.toISOString(), draftRevision: job.draft.revision, factsAndLinksReviewed: true, conflictAcknowledged: job.approval.conflictAcknowledged, ...(job.approval.standardUnverifiedAcknowledged ? { standardUnverifiedAcknowledged: true } : {}) };
     job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
     job.registration = null;
     job.status = 'awaiting_registration';
