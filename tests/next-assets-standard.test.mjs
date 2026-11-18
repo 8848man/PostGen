@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assetsStandardConfig, loadAssetsStandard, parseStandard, imageRequest, standardChecks, standardRecord } from '../next/assets-standard.mjs';
-import { draftPrompt, generateDraft } from '../next/generate.mjs';
+import { draftPrompt, generateDraft, IMAGE_SCENE_RULE } from '../next/generate.mjs';
 import { evaluateDraft } from '../next/evaluate.mjs';
 
 const text = `<!-- Assets Manager 표준: 네이버 블로그 포스팅 (naver-blog-post) -->
@@ -87,6 +87,18 @@ test('draft prompt carries the standard as the base rule set and keeps JSON outp
   const { draft, diagnostics } = await generateDraft(input, {}, async () => ({ result, usage: null }));
   assert.deepEqual(draft.headings, ['먼저 정한 것']);
   assert.equal(diagnostics[0].code, 'heading_mismatch');
+});
+
+test('draft prompt asks for a distinct pose, viewpoint and composition per image scene without style words', () => {
+  const input = { sources: [{ id: 's1', type: 'text', text: '근거' }], account: { channel: 'naver', handle: 'h' }, sample: null, audience: 'a', goal: 'g', plan: null };
+  for (const standard of [null, parseStandard(raw, 'naver-blog-post')]) {
+    const prompt = draftPrompt({ ...input, standard });
+    assert.ok(prompt.includes(IMAGE_SCENE_RULE));
+    assert.match(prompt, /pose, viewpoint \(camera distance and angle\) and composition/);
+    assert.match(prompt, /different from every earlier image scene/);
+    assert.match(prompt, /without style words/);
+  }
+  assert.match(draftPrompt({ ...input, standard: parseStandard(raw, 'naver-blog-post') }), /no style words/);
 });
 
 test('evaluation must answer every standard self-check item in order', async () => {
