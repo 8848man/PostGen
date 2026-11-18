@@ -40,7 +40,7 @@ $postgen으로 이 프로젝트 작업 기록을 블로그 글로 만들어줘
 
 계정별 자료 선택·생성·승인·예약 화면은 저장소 루트에서 실행합니다. 브라우저 예약 등록에 `playwright-core`가 쓰이므로, 처음 한 번 npm 패키지를 설치해야 합니다.
 
-Windows에서는 저장소 루트의 [start-postgen-review.cmd](start-postgen-review.cmd)를 더블클릭하면 검토 화면 서버와 기본 브라우저가 열립니다. 이 창을 닫으면 서버도 종료됩니다. 이전 포스팅용 크롬의 PostGen 데이터가 있으면 자동으로 사용하고, 다른 데이터 폴더는 실행 전에 `POSTGEN_DATA_DIR` 환경 변수로 지정할 수 있습니다. 자동으로 브라우저가 열리지 않으면 창에 표시된 토큰 URL 전체를 복사해 여세요.
+Windows에서는 저장소 루트의 [start-postgen-review.cmd](start-postgen-review.cmd)를 더블클릭하면 최신 검토 화면 서버와 바탕화면의 `포스팅용 크롬.lnk`로 크롬이 열립니다. 이 창을 닫으면 서버도 종료됩니다. 이전 포스팅용 크롬의 PostGen 데이터가 있으면 자동으로 사용하고, 다른 데이터 폴더는 실행 전에 `POSTGEN_DATA_DIR` 환경 변수로 지정할 수 있습니다. 자동으로 브라우저가 열리지 않으면 창에 표시된 토큰 URL 전체를 포스팅용 크롬에서 여세요.
 
 ```powershell
 npm install
