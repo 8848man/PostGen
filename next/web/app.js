@@ -59,6 +59,19 @@ function imageRevisionDialog() {
     dialog.showModal(); input.focus();
   });
 }
+function confirmUnverifiedStandard() {
+  return new Promise(resolve => {
+    const dialog = document.createElement('dialog'); dialog.className = 'image-revision-dialog'; dialog.setAttribute('aria-label', '표준 확인');
+    const form = document.createElement('form'); form.method = 'dialog';
+    const message = document.createElement('p'); message.textContent = '표준 확인이 안된 글입니다. 발행하시겠습니까?';
+    const actions = document.createElement('div'); actions.className = 'image-revision-actions';
+    const cancel = document.createElement('button'); cancel.type = 'submit'; cancel.value = 'cancel'; cancel.textContent = '취소';
+    const publish = document.createElement('button'); publish.type = 'submit'; publish.value = 'publish'; publish.textContent = '발행';
+    actions.append(cancel, publish); form.append(message, actions); dialog.append(form); document.body.append(dialog);
+    dialog.addEventListener('close', () => { const confirmed = dialog.returnValue === 'publish'; dialog.remove(); resolve(confirmed); }, { once: true });
+    dialog.showModal();
+  });
+}
 async function registerBrowser(jobId, sessionId) {
   const output = await api('/api/registration/browser', { jobId, sessionId });
   say(output.result.verified ? '플랫폼 예약 등록을 확인했습니다.' : output.result.notSubmitted ? `태그나 발행 설정을 확인하지 못해 발행 버튼을 누르지 않았습니다: ${output.result.reason}` : `예약 결과를 확인할 수 없습니다. 플랫폼에서 중복 등록 여부를 확인하세요: ${output.result.reason}`);
@@ -119,7 +132,7 @@ async function refresh() {
     const outcome = document.createElement('div'); outcome.className = 'outcome';
     const outcomeTitle = document.createElement('strong'); outcomeTitle.textContent = '예상 결과와 현재 상태'; outcome.append(outcomeTitle);
     const outcomeText = document.createElement('p'); outcomeText.textContent = `${channelLabels[account?.channel] || account?.channel || '채널'} / ${job.accountHandle}에 “${job.draft?.title || '제목 미정'}” 글을 ${job.schedule?.at ? new Date(job.schedule.at).toLocaleString('ko-KR') : '승인 후 지정할 시각'}에 예약합니다. 현재: ${displayStatus(job)}.`; outcome.append(outcomeText);
-    if (job.status === 'draft' && !hasDraftStandard(job)) { const notice = document.createElement('p'); notice.textContent = '지침 적용 기록이 없습니다. Assets Manager 표준을 연결하고 초안을 다시 생성한 뒤 검토·발행하세요.'; outcome.append(notice); }
+    if (job.status === 'draft' && !hasDraftStandard(job)) { const notice = document.createElement('p'); notice.textContent = '지침 적용 기록이 없습니다. 발행 시 별도 확인을 요청합니다.'; outcome.append(notice); }
     if (job.registration) { const registration = document.createElement('p'); registration.textContent = `플랫폼 예약: ${job.registration.verified ? '확인됨' : '확인 불가'} · ${job.registration.remoteId || job.registration.reservationUrl || '영수증 없음'}`; outcome.append(registration); }
     if (job.publication?.postUrl) { const link = document.createElement('a'); link.href = job.publication.postUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `공개 글 확인: ${job.publication.postUrl}`; outcome.append(link); }
     if (job.review) { const note = document.createElement('p'); note.className = 'review-note'; note.textContent = `${job.review.decision === 'rejected' ? '반려' : '개선 요청'}: ${job.review.note}`; outcome.append(note); }
@@ -191,10 +204,12 @@ async function refresh() {
       const publish = button('발행', async () => {
         const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
         const at = parsed.toISOString();
-        await api(job.status === 'draft' ? '/api/publish-reservation' : '/api/schedule', { jobId: job.id, at, conflictAcknowledged: conflict?.checked === true });
+        const standardUnverifiedAcknowledged = job.status === 'draft' && !hasDraftStandard(job) ? await confirmUnverifiedStandard() : false;
+        if (job.status === 'draft' && !hasDraftStandard(job) && !standardUnverifiedAcknowledged) return;
+        await api(job.status === 'draft' ? '/api/publish-reservation' : '/api/schedule', { jobId: job.id, at, conflictAcknowledged: conflict?.checked === true, standardUnverifiedAcknowledged });
         await api('/api/start', { jobId: job.id });
         await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
-      }, () => !hasDraftStandard(job) ? 'Assets Manager 지침 적용 기록이 없어 발행할 수 없습니다. 표준을 연결하고 초안을 다시 생성하세요.' : missing > 0 ? `이미지 ${missing}장을 아직 만들지 않아 발행할 수 없습니다. 이미지를 만들거나 제안을 제외하세요.` : null);
+      }, () => missing > 0 ? `이미지 ${missing}장을 아직 만들지 않아 발행할 수 없습니다. 이미지를 만들거나 제안을 제외하세요.` : null);
       row.append(time);
       if (job.status === 'draft' && missing) row.append(button('이미지 만들기', async () => {
         if (job.imageProvider !== 'codex') await api('/api/images/provider', { jobId: job.id, provider: 'codex' });
@@ -204,7 +219,7 @@ async function refresh() {
         say(`${remaining.length}개 이미지가 준비됐습니다. 확인한 뒤 발행하세요.`, 60_000);
       }));
       row.append(publish); panel.append(row);
-      const hint = document.createElement('p'); hint.textContent = !hasDraftStandard(job) ? 'Assets Manager 지침 적용 기록이 없습니다. 표준을 연결하고 초안을 다시 생성하세요.' : missing ? `이미지 ${missing}장을 먼저 만드세요.` : '이미지마다 승인할 필요 없이 발행 한 번으로 진행합니다.'; panel.append(hint);
+      const hint = document.createElement('p'); hint.textContent = missing ? `이미지 ${missing}장을 먼저 만드세요.` : !hasDraftStandard(job) ? '지침 적용 기록이 없어 발행 시 확인 다이얼로그가 열립니다.' : '이미지마다 승인할 필요 없이 발행 한 번으로 진행합니다.'; panel.append(hint);
       if (job.diagnostics?.some(item => item.code === 'source_conflict')) { const label = document.createElement('label'); conflict = document.createElement('input'); conflict.type = 'checkbox'; label.append(conflict, ' 출처 충돌을 확인했습니다'); panel.append(label); }
       article.append(panel);
     }

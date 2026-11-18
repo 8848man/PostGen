@@ -52,14 +52,26 @@ try {
   await openJob(ids[0]);
   const publish = page.getByRole('button', { name: '발행', exact: true });
   assert.equal(await publish.isEnabled(), true);
+  await page.route('**/api/start', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
+  await page.route('**/api/prepare-browser', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessionId: 'test', loginRequired: true, message: 'Test browser handoff' }) }));
   await publish.click();
-  await page.getByRole('status').getByText('Assets Manager 지침 적용 기록이 없어 발행할 수 없습니다.', { exact: false }).waitFor();
+  const warning = page.getByRole('dialog', { name: '표준 확인' });
+  await warning.getByText('표준 확인이 안된 글입니다. 발행하시겠습니까?').waitFor();
+  await warning.getByRole('button', { name: '취소' }).click();
   assert.equal(publishRequests, 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs.find(job => job.id === ids[0]).status, 'draft');
+  await publish.click();
+  await warning.getByRole('button', { name: '발행' }).click();
+  await page.getByRole('status').getByText('로그인 후 재개', { exact: false }).waitFor();
+  const forced = JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs.find(job => job.id === ids[0]);
+  assert.equal(forced.status, 'awaiting_registration');
+  assert.equal(forced.approval.standardUnverifiedAcknowledged, true);
+  assert.equal(publishRequests, 1);
 
   await openJob(ids[1]);
   await page.getByRole('button', { name: '발행', exact: true }).click();
   await page.getByRole('status').getByText('이미지 1장을 아직 만들지 않아 발행할 수 없습니다.', { exact: false }).waitFor();
-  assert.equal(publishRequests, 0);
+  assert.equal(publishRequests, 1);
 
   await openJob(ids[2]);
   const regenerate = page.getByRole('button', { name: '이 이미지 재생성' });
@@ -69,8 +81,6 @@ try {
   assert.equal(regenerationRequests, 0);
   let releasePublish;
   await page.route('**/api/publish-reservation', route => { releasePublish = () => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }); });
-  await page.route('**/api/start', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
-  await page.route('**/api/prepare-browser', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessionId: 'test', loginRequired: true, message: 'Test browser handoff' }) }));
   await page.getByLabel('공개 시각').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
   const busyPublish = page.getByRole('button', { name: '발행', exact: true });
   const pendingRequest = page.waitForRequest(request => request.url().endsWith('/api/publish-reservation'));
@@ -79,9 +89,9 @@ try {
   assert.equal(await busyPublish.isEnabled(), true);
   await busyPublish.click();
   await page.getByRole('status').getByText('발행 작업이 진행 중입니다.', { exact: false }).waitFor();
-  assert.equal(publishRequests, 1);
+  assert.equal(publishRequests, 2);
   await releasePublish();
-  process.stdout.write('Button reasons dashboard smoke passed: blocked conditions and in-progress clicks use toasts\n');
+  process.stdout.write('Button reasons dashboard smoke passed: unverified standard confirmation, blocked conditions, and in-progress clicks\n');
 } finally {
   if (browser) await browser.close();
   if (child) child.kill();
