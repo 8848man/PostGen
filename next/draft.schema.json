@@ -6,7 +6,7 @@
     "body": { "type": "string" },
     "headings": { "type": "array", "items": { "type": "string" } },
     "claims": { "type": "array", "items": { "type": "object", "properties": { "text": { "type": "string" }, "sourceIds": { "type": "array", "items": { "type": "string" } } }, "required": ["text", "sourceIds"], "additionalProperties": false } },
-    "images": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "afterParagraph": { "type": "integer" }, "description": { "type": "string" } }, "required": ["id", "afterParagraph", "description"], "additionalProperties": false } },
+    "images": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "afterParagraph": { "type": "integer" }, "description": { "type": "string" }, "kind": { "type": "string", "enum": ["illustration", "chart", "diagram"] } }, "required": ["id", "afterParagraph", "description", "kind"], "additionalProperties": false } },
     "diagnostics": { "type": "array", "items": { "type": "object", "properties": { "code": { "type": "string" }, "message": { "type": "string" } }, "required": ["code", "message"], "additionalProperties": false } }
   },
   "required": ["title", "tags", "body", "headings", "claims", "images", "diagnostics"],

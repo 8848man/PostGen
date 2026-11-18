@@ -10,6 +10,7 @@ const text = `<!-- Assets Manager 표준: 네이버 블로그 포스팅 (naver-b
 
 ## 규칙
 - **톤과 말투**: 1인칭 평서체(~다)
+- **차트·도식 스타일**: 도식이나 차트가 필요하면 첨부 [1] naver-graph-style.png의 형태를 따르세요.
 
 ## 첨부 레퍼런스
 - [1] naver-graph-style.png — 그래프
@@ -62,15 +63,28 @@ test('image request fills the library template and resolves reference originals'
 });
 
 test('chart and diagram image slots use the same request and original reference mapping', () => {
-  const chartText = text.replace('naver-illustration-style.png (화풍)', 'naver-graph-style.png (차트·도식 원본)');
-  const standard = parseStandard(JSON.stringify({ found: true, set: 'naver-blog-post', title: '네이버 블로그 포스팅', text: chartText, files: ['C:/lib/image/naver-graph-style.png'] }), 'naver-blog-post');
-  const chart = imageRequest(standardRecord(standard), { position: '본문 3번째 문단 뒤', scene: '가로축은 시간, 세로축은 완료 건수인 두 계열 선 차트.' });
-  const diagram = imageRequest(standardRecord(standard), { position: '본문 5번째 문단 뒤', scene: '세 단계가 화살표로 이어진 흐름도.' });
+  const standard = parseStandard(raw, 'naver-blog-post');
+  const chart = imageRequest(standardRecord(standard), { position: '본문 3번째 문단 뒤', scene: '가로축은 시간, 세로축은 완료 건수인 두 계열 선 차트.', kind: 'chart' });
+  const diagram = imageRequest(standardRecord(standard), { position: '본문 5번째 문단 뒤', scene: '세 단계가 화살표로 이어진 흐름도.', kind: 'diagram' });
   assert.match(chart.text, /본문 3번째 문단 뒤/);
   assert.match(chart.text, /두 계열 선 차트/);
   assert.deepEqual(chart.referencePaths, ['C:/lib/image/naver-graph-style.png']);
+  assert.doesNotMatch(chart.text, /naver-illustration-style/);
   assert.match(diagram.text, /본문 5번째 문단 뒤/);
   assert.match(diagram.text, /흐름도/);
+  assert.deepEqual(diagram.referencePaths, ['C:/lib/image/naver-graph-style.png']);
+});
+
+test('current combined Assets Manager template separates graph and illustration originals', () => {
+  const combined = text.replace(/^- \*\*차트·도식 스타일\*\*: .*\n/m, '')
+    .replace('참조 이미지로 첨부: [2] naver-illustration-style.png (화풍)', '참조 이미지로 첨부: [1] naver-graph-style.png (차트·도식 스타일), [2] naver-illustration-style.png (화풍)')
+    .replace('- 장면: <무엇이, 어디서, 무엇을 하는가 — 1~3문장>', '- 장면 또는 내용: <삽화 장면 또는 차트 데이터>');
+  const standard = parseStandard(JSON.stringify({ found: true, set: 'naver-blog-post', title: '네이버', text: combined, files: JSON.parse(raw).files }), 'naver-blog-post');
+  const chart = imageRequest(standardRecord(standard), { position: '본문 뒤', scene: '비교 막대 차트', kind: 'chart' });
+  const illustration = imageRequest(standardRecord(standard), { position: '도입 뒤', scene: '두 사람이 함께 생각한다', kind: 'illustration' });
+  assert.match(chart.text, /장면 또는 내용: 비교 막대 차트/);
+  assert.deepEqual(chart.referencePaths, ['C:/lib/image/naver-graph-style.png']);
+  assert.deepEqual(illustration.referencePaths, ['C:/lib/image/naver-illustration-style.png']);
 });
 
 test('draft prompt carries the standard as the base rule set and keeps JSON output', async () => {

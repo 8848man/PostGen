@@ -3,10 +3,32 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft as saveDraft, recordModelUsage, setDraftEvaluation, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
+const standard = { set: 'naver-blog-post', sha256: 'a'.repeat(64) };
+const setDraft = (state, id, value, diagnostics) => saveDraft(state, id, { ...value, standard }, diagnostics);
+
+test('drafts without applied standard cannot enter normal review or publication', () => {
+  const state = createJob(emptyState(), { accountId: 'a', audience: '독자', goal: '설명', sources: [source] });
+  const id = state.jobs[0].id;
+  const missing = saveDraft(state, id, { title: '제목', body: '본문', claims: [], images: [] });
+  assert.throws(() => reviewDraft(missing, id, 'rejected', '다시 작성'), /standard record is missing/);
+  assert.throws(() => approveDraft(missing, id), /standard record is missing/);
+  assert.throws(() => publishDraftReservation(missing, id, '2026-11-20T00:00:00Z', {}, new Date('2026-11-18T00:00:00Z')), /standard record is missing/);
+});
+
+test('model calls persist by job and shared call ID can be deduplicated for campaign totals', () => {
+  let state = createCampaign(emptyState(), { accounts: [{ id: 'a', handle: 'a', goal: '설명' }, { id: 'b', handle: 'b', goal: '설명' }], audience: '독자', sources: [source] });
+  const id = state.jobs[0].id;
+  state = recordModelUsage(state, id, 'shared-plan', { provider: 'codex', known: true, inputTokens: 10, outputTokens: 5, totalTokens: 15 }, { campaign: true, callId: 'one' });
+  state = recordModelUsage(state, id, 'draft', { provider: 'codex', known: true, inputTokens: 20, outputTokens: 10, totalTokens: 30 }, { callId: 'two' });
+  assert.deepEqual(state.jobs.map(job => job.modelUsage.map(entry => entry.id)), [['one','two'], ['one']]);
+  state = setDraft(state, id, { title: '제목', body: '본문', claims: [], images: [] });
+  state = setDraftEvaluation(state, id, { score: 4 });
+  assert.equal(state.jobs[0].draft.evaluation.score, 4);
+});
 
 test('one publish action connects every candidate and starts reservation without partial changes', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'postgen-publish-'));
