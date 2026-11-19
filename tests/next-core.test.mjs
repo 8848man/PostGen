@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft as saveDraft, recordModelUsage, setDraftEvaluation, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft as saveDraft, recordModelUsage, setDraftEvaluation, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
@@ -179,6 +179,28 @@ test('cancelled publication can be recorded manually or retried with fresh appro
   assert.equal(state.jobs[0].status, 'draft');
   assert.equal(state.jobs[0].approval, null);
   assert.deepEqual(state.jobs[0].draft.tags, ['PostGen']);
+});
+
+test('manual publication checkbox works from tag-entry failure and can be undone', () => {
+  let state = createJob(emptyState(), { accountId: 'a', audience: 'reader', goal: 'inform', sources: [source] });
+  const id = state.jobs[0].id;
+  state = approveDraft(setDraft(state, id, { title: 'title', body: 'body', tags: ['PostGen'], claims: [], images: [] }), id);
+  state = scheduleJob(state, id, '2026-11-25T00:00:00Z', new Date('2026-11-20T00:00:00Z'));
+  state = startPreparation(state, id, new Date('2026-11-20T01:00:00Z'));
+  state = reviewPreparation(state, id, { editorUrl: 'https://example.com/edit', visibleAccount: 'a', title: 'title', body: 'body' });
+  assert.equal(state.jobs[0].status, 'ready_to_register');
+  const manual = markManualPublication(state, id, new Date('2026-11-20T02:00:00Z'));
+  assert.equal(manual.jobs[0].status, 'published');
+  assert.equal(manual.jobs[0].publication.source, 'manual');
+  assert.equal(manual.jobs[0].publication.postUrl, null);
+  assert.equal(manual.jobs[0].publication.previousStatus, 'ready_to_register');
+  state = unmarkManualPublication(manual, id);
+  assert.equal(state.jobs[0].status, 'ready_to_register');
+  assert.equal(state.jobs[0].publication, null);
+  const submitting = beginScheduleSubmission(state, id, new Date('2026-11-20T02:00:00Z'));
+  assert.throws(() => markManualPublication(submitting, id), /Cannot change submitting job/);
+  const cancelled = cancelJob(state, id);
+  assert.equal(markManualPublication(cancelled, id).jobs[0].publication.previousStatus, 'cancelled');
 });
 
 test('expired source copies can be restored for 14 days, then are purged', () => {

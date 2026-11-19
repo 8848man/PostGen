@@ -27,7 +27,7 @@ export function validateState(state) {
     if (job.review && (!['rejected','improvement_requested'].includes(job.review.decision) || !nonempty(job.review.note, 2000) || !iso(job.review.at))) throw new Error('Invalid draft review');
     if (job.imageProvider !== undefined && !['manual', 'codex'].includes(job.imageProvider)) throw new Error('Invalid image host');
     if ((['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) || job.status === 'published' && job.publication?.source !== 'manual') && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
-    if (job.status === 'published' && (!job.draft || !nonempty(job.publication?.postUrl, 2048))) throw new Error('Published job needs a draft and public URL');
+    if (job.status === 'published' && (!job.draft || !iso(job.publication?.at) || (job.publication?.source !== 'manual' && !nonempty(job.publication?.postUrl, 2048)))) throw new Error('Published job needs a draft and publication record');
     if (['scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) && (!iso(job.schedule?.at) || !iso(job.schedule?.expiresAt))) throw new Error('Scheduled job needs a time');
     if ((['registered','verification_due'].includes(job.status) || job.status === 'published' && job.registration) && job.schedule && (!job.registration?.verified || job.registration.publishAt !== job.schedule.at || job.registration.accountHandle !== job.accountHandle)) throw new Error('Platform reservation must be verified');
     ids.add(job.id);
@@ -455,6 +455,22 @@ export function recordPublication(state, id, { postUrl, finalTitle, finalBody, s
     if (postUrl === job.editor?.editorUrl) throw new Error('Editor URL is not a published post URL');
     job.publication = { postUrl, finalTitle: finalTitle || job.editor?.title || job.draft.title, finalBody: finalBody || job.editor?.body || job.draft.body, source: job.status === 'cancelled' ? 'manual' : source, finalTextSource, at: new Date().toISOString() };
     job.status = 'published';
+  });
+}
+const manuallyPublishable = ['draft','approved','awaiting_registration','preparing','review_required','ready_to_register','cancelled','expired','failed'];
+export function markManualPublication(state, id, now = new Date()) {
+  return change(state, id, manuallyPublishable, job => {
+    if (!job.draft) throw new Error('A draft is required to mark manual publication');
+    if (job.submission?.startedAt || job.registration) throw new Error('Check the platform reservation before marking manual publication');
+    job.publication = { postUrl: null, finalTitle: job.editor?.title || job.draft.title, finalBody: job.editor?.body || job.draft.body, source: 'manual', finalTextSource: 'user', at: now.toISOString(), previousStatus: job.status };
+    job.status = 'published';
+  });
+}
+export function unmarkManualPublication(state, id) {
+  return change(state, id, ['published'], job => {
+    if (job.publication?.source !== 'manual') throw new Error('Only manual publication can be unchecked');
+    job.status = job.publication.previousStatus || 'cancelled';
+    job.publication = null;
   });
 }
 export function cancelJob(state, id) { return change(state, id, ['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','expired'], job => { job.status = 'cancelled'; }); }

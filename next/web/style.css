@@ -30,6 +30,9 @@ main { max-width: 1800px; margin: auto; padding: 0 32px 80px; }
 .campaign-card.complete .campaign-progress { background: #d8f1e2; color: #17623d; }
 .tag-edit-row { display: flex; gap: 8px; margin: 10px 0 18px; }
 .tag-edit-row input { flex: 1; min-width: 0; }
+.manual-publication { display: grid; gap: 4px; padding: 12px 14px; margin: 12px 0; border: 1px solid #78aa8d; border-radius: 12px; background: #f0faf3; }
+.manual-publication label { display: flex; align-items: center; gap: 8px; font-weight: 800; cursor: pointer; }
+.manual-publication small { color: #476653; }
 .source-detail { margin-top: 22px; }
 .source-item { border-top: 1px solid #dce6f2; padding-top: 16px; margin-top: 16px; }
 .source-item small { overflow-wrap: anywhere; }
