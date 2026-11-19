@@ -26,7 +26,8 @@ export function validateState(state) {
     if (job.draft?.tags !== undefined) cleanTags(job.draft.tags);
     if (job.review && (!['rejected','improvement_requested'].includes(job.review.decision) || !nonempty(job.review.note, 2000) || !iso(job.review.at))) throw new Error('Invalid draft review');
     if (job.imageProvider !== undefined && !['manual', 'codex'].includes(job.imageProvider)) throw new Error('Invalid image host');
-    if (['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','published','expired'].includes(job.status) && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
+    if ((['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) || job.status === 'published' && job.publication?.source !== 'manual') && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
+    if (job.status === 'published' && (!job.draft || !nonempty(job.publication?.postUrl, 2048))) throw new Error('Published job needs a draft and public URL');
     if (['scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) && (!iso(job.schedule?.at) || !iso(job.schedule?.expiresAt))) throw new Error('Scheduled job needs a time');
     if ((['registered','verification_due'].includes(job.status) || job.status === 'published' && job.registration) && job.schedule && (!job.registration?.verified || job.registration.publishAt !== job.schedule.at || job.registration.accountHandle !== job.accountHandle)) throw new Error('Platform reservation must be verified');
     ids.add(job.id);
@@ -446,16 +447,30 @@ export function confirmUnknownSchedule(state, id, receipt) {
   return change(state, id, ['unknown'], job => applyVerifiedRegistration(job, receipt, { recheckedAfterUnknown: true }));
 }
 export function recordPublication(state, id, { postUrl, finalTitle, finalBody, source = 'user', finalTextSource = 'user', changedClaimsReviewed = false }, now = new Date()) {
-  return change(state, id, ['verification_due','registered','unknown'], job => {
-    if (job.schedule && now.getTime() < Date.parse(job.schedule.at)) throw new Error('Scheduled publication time has not passed');
+  return change(state, id, ['verification_due','registered','unknown','cancelled'], job => {
+    if (!job.draft) throw new Error('A draft is required to record publication');
+    if (job.status !== 'cancelled' && job.schedule && now.getTime() < Date.parse(job.schedule.at)) throw new Error('Scheduled publication time has not passed');
     if (!nonempty(postUrl, 2048) || !/^https:\/\//i.test(postUrl)) throw new Error('Verified post URL required');
-    if (finalBody && finalBody !== job.editor?.body && !changedClaimsReviewed) throw new Error('Changed editor claims need review');
+    if (finalBody && finalBody !== (job.editor?.body || job.draft.body) && !changedClaimsReviewed) throw new Error('Changed editor claims need review');
     if (postUrl === job.editor?.editorUrl) throw new Error('Editor URL is not a published post URL');
-    job.publication = { postUrl, finalTitle: finalTitle || job.editor?.title || job.draft.title, finalBody: finalBody || job.editor?.body || job.draft.body, source, finalTextSource, at: new Date().toISOString() };
+    job.publication = { postUrl, finalTitle: finalTitle || job.editor?.title || job.draft.title, finalBody: finalBody || job.editor?.body || job.draft.body, source: job.status === 'cancelled' ? 'manual' : source, finalTextSource, at: new Date().toISOString() };
     job.status = 'published';
   });
 }
-export function cancelJob(state, id) { return change(state, id, ['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','expired'], job => { job.status = 'cancelled'; }); }
+export function cancelJob(state, id) { return change(state, id, ['selected','draft','approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','expired'], job => { job.status = 'cancelled'; }); }
+export function retryPublication(state, id) {
+  return change(state, id, ['cancelled','failed'], job => {
+    if (!job.draft) throw new Error('A draft is required to retry publication');
+    if (job.submission?.startedAt || job.registration) throw new Error('Check the platform before retrying a submitted reservation');
+    job.approval = null;
+    job.schedule = null;
+    job.editor = null;
+    job.submission = null;
+    job.registration = null;
+    job.review = null;
+    job.status = 'draft';
+  });
+}
 
 export function pruneOldSources(state, months = 3, now = new Date()) {
   if (!Number.isInteger(months) || months < 1 || months > 3) throw new Error('Retention must be 1–3 months');

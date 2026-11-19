@@ -108,11 +108,13 @@ async function refresh() {
   if (!campaigns.has(selectedCampaignId)) selectedCampaignId = sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft' && job.draft?.images?.length))?.[0] || sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft'))?.[0] || sortedCampaigns[0]?.[0] || null;
   const campaignList = document.querySelector('#campaigns'); campaignList.replaceChildren();
   for (const [key, group] of sortedCampaigns) {
-    const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card ${key === selectedCampaignId ? 'selected' : ''}`;
+    const published = group.filter(job => job.status === 'published').length;
+    const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card campaign-card ${published === group.length ? 'complete' : published ? 'in-progress' : ''} ${key === selectedCampaignId ? 'selected' : ''}`;
     const source = group[0].sources[0];
     const title = document.createElement('strong'); title.textContent = excerpt(source?.text || group[0].draft?.title || '원본 사본 만료', 55);
     const meta = document.createElement('small'); meta.textContent = `${group.length}개 채널 글 · ${new Date(group[0].createdAt).toLocaleDateString('ko-KR')} · ${group[0].sources.length}개 출처`;
-    item.append(title, meta); item.onclick = () => { selectedCampaignId = key; selectedJobId = null; refresh().catch(error => say(error.message)); }; campaignList.append(item);
+    const progress = document.createElement('span'); progress.className = 'campaign-progress'; progress.textContent = `${published === group.length ? '✓ 모든 채널 발행 확인' : published ? '◐ 일부 채널 발행 확인' : '○ 발행 확인 전'} · ${published}/${group.length}`;
+    item.append(title, meta, progress); item.onclick = () => { selectedCampaignId = key; selectedJobId = null; refresh().catch(error => say(error.message)); }; campaignList.append(item);
   }
   const group = campaigns.get(selectedCampaignId) || [];
   const sourceDetail = document.querySelector('#sources'); sourceDetail.replaceChildren();
@@ -138,6 +140,27 @@ async function refresh() {
     if (job.review) { const note = document.createElement('p'); note.className = 'review-note'; note.textContent = `${job.review.decision === 'rejected' ? '반려' : '개선 요청'}: ${job.review.note}`; outcome.append(note); }
     article.append(outcome);
     if (job.draft) { const tags = document.createElement('p'); tags.className = 'draft-tags'; tags.textContent = `추천 태그 (${(job.draft.tags || []).length}/5): ${(job.draft.tags || []).map(tag => `#${tag}`).join('  ') || '없음'}`; article.append(tags); }
+    if (job.status === 'draft') {
+      const tagRow = document.createElement('div'); tagRow.className = 'tag-edit-row';
+      const tagInput = document.createElement('input'); tagInput.setAttribute('aria-label', '발행 태그'); tagInput.placeholder = '태그를 쉼표로 구분해 입력 (최대 5개)'; tagInput.value = (job.draft.tags || []).join(', ');
+      tagRow.append(tagInput, button('태그 저장', async () => {
+        const tags = tagInput.value.split(',').map(tag => tag.trim()).filter(Boolean);
+        const { lock } = await api('/api/draft/lock', { jobId: job.id });
+        try { await api('/api/draft', { jobId: job.id, draft: { ...job.draft, tags }, lockToken: lock.token, expectedDraftRevision: lock.draftRevision }); }
+        finally { await api('/api/draft/unlock', { jobId: job.id, token: lock.token }); }
+        say('태그를 저장했습니다. 발행 창에서 개별 태그 등록을 확인합니다.');
+      })); article.append(tagRow);
+    }
+    if (['cancelled','failed','ready_to_register','unknown'].includes(job.status)) {
+      const recovery = document.createElement('section'); recovery.className = 'publish-panel';
+      const heading = document.createElement('h4'); heading.textContent = '발행 결과 검토'; recovery.append(heading);
+      if (['cancelled','failed'].includes(job.status) && job.draft) recovery.append(button('발행 다시 시도', async () => { if (!confirm('초안을 다시 검토하고 이 계정의 발행을 새로 승인하시겠습니까?')) return; await api('/api/publication/retry', { jobId: job.id }); say('초안 검토로 되돌렸습니다. 태그와 내용을 확인한 뒤 새 예약을 진행하세요.'); }));
+      if (job.status === 'cancelled' && job.draft) recovery.append(button('이미 발행됨으로 기록', async () => { const postUrl = prompt('실제로 공개된 글 URL'); if (!postUrl) return; const finalTitle = prompt('공개된 제목', job.editor?.title || job.draft.title); if (finalTitle === null) return; const finalBody = prompt('공개된 본문', job.editor?.body || job.draft.body); if (finalBody === null) return; if (!confirm('공개된 글과 URL을 확인했습니까? 이 작업을 수동 발행 완료로 기록합니다.')) return; await api('/api/publication', { jobId: job.id, publication: { postUrl, finalTitle, finalBody, source: 'manual', finalTextSource: 'user', changedClaimsReviewed: true } }); say('수동 발행 완료로 기록했습니다.'); }));
+      if (job.status === 'ready_to_register') recovery.append(button('발행 설정 확인 후 다시 시도', async () => { const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (!sessionId) throw new Error('편집기 세션이 없습니다. 이 발행을 취소하고 초안에서 다시 시도하세요.'); await registerBrowser(job.id, sessionId); }));
+      if (job.status === 'unknown' && account?.channel === 'naver') recovery.append(button('네이버 예약 목록 다시 확인', async () => { const output = await api('/api/registration/recheck', { jobId: job.id }); say(output.result.verified ? '예약 등록을 확인했습니다.' : `등록 여부를 확인하지 못했습니다: ${output.result.reason}`); }));
+      article.append(recovery);
+    }
+    if (['selected','draft','approved','awaiting_registration','preparing','review_required','ready_to_register','expired'].includes(job.status)) article.append(button('이 발행 취소', async () => { if (confirm('이 계정의 발행 작업을 취소합니까?')) await api('/api/cancel', { jobId: job.id }); }));
     if (job.draft) {
       const imageReview = document.createElement('section'); imageReview.className = 'image-review';
       const heading = document.createElement('h4'); heading.textContent = `이미지 ${job.draft.images.length}건`; imageReview.append(heading);
