@@ -31,6 +31,12 @@ test('Codex image output is accepted only from the completed run thread', async 
     });
     assert.deepEqual(argumentsSeen.slice(argumentsSeen.indexOf('--image') + 1, argumentsSeen.indexOf('--image') + 2), [reference]);
     assert.equal(argumentsSeen.at(-1), '-');
+    assert.equal(argumentsSeen.includes('-m'), false);
+    await generateHostImage({ request: { text: 'scene' }, scene: 'scene', model: 'gpt-6-sol' }, {
+      binary: 'codex.exe', codexHome: home,
+      run: async (_, args) => { argumentsSeen = args; return { code: 0, stdout: events }; }
+    });
+    assert.equal(argumentsSeen[argumentsSeen.indexOf('-m') + 1], 'gpt-6-sol');
     const outside = path.join(home, 'outside.png');
     fs.writeFileSync(outside, Buffer.from('89504e470d0a1a0a', 'hex'));
     const outsideEvents = [

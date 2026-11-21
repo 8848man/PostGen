@@ -16,7 +16,7 @@ export async function runImageAttempts(input, { remaining, autoCheck }, deps = {
     let checkUsage = null;
     if (autoCheck) {
       try {
-        const checked = await check({ generatedPath: storedPath, referencePaths: input.referencePaths, scene: input.scene, request: input.request });
+        const checked = await check({ generatedPath: storedPath, referencePaths: input.referencePaths, scene: input.scene, request: input.request, model: input.model });
         verdict = checked.check;
         checkUsage = checked.usage;
       } catch (error) {

@@ -88,6 +88,8 @@ async function refresh() {
   const settingsForm = document.querySelector('#settings');
   for (const name of ['retentionMonths', 'maxImageGenerations']) settingsForm.elements[name].value = String(cache.settings[name]);
   for (const name of ['backgroundNotifications', 'autoImageCheck']) settingsForm.elements[name].checked = cache.settings[name];
+  settingsForm.elements.codexImageModel.replaceChildren(...(cache.codexModels || []).map(model => { const option = document.createElement('option'); option.value = model.id; option.textContent = model.recommended ? `${model.label} (권장)` : model.label; return option; }));
+  settingsForm.elements.codexImageModel.value = cache.settings.codexImageModel;
   const accountSelect = document.querySelector('#accounts'); const selectedAccounts = new Set([...accountSelect.selectedOptions].map(option => option.value)); accountSelect.replaceChildren();
   const sampleAccountSelect = document.querySelector('#sample-accounts'); sampleAccountSelect.replaceChildren();
   const assetAccountSelect = document.querySelector('#asset-accounts'); assetAccountSelect.replaceChildren();
@@ -283,7 +285,7 @@ async function refresh() {
   }
 }
 document.querySelector('#account').onsubmit = async event => { event.preventDefault(); try { await api('/api/account', Object.fromEntries(new FormData(event.target))); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };
-document.querySelector('#settings').onsubmit = async event => { event.preventDefault(); const form = event.target; try { await api('/api/settings', { retentionMonths: Number(form.elements.retentionMonths.value), backgroundNotifications: form.elements.backgroundNotifications.checked, autoImageCheck: form.elements.autoImageCheck.checked, maxImageGenerations: Number(form.elements.maxImageGenerations.value) }); await refresh(); say('운영 설정을 저장했습니다.'); } catch (error) { say(error.message); } };
+document.querySelector('#settings').onsubmit = async event => { event.preventDefault(); const form = event.target; try { await api('/api/settings', { retentionMonths: Number(form.elements.retentionMonths.value), backgroundNotifications: form.elements.backgroundNotifications.checked, autoImageCheck: form.elements.autoImageCheck.checked, maxImageGenerations: Number(form.elements.maxImageGenerations.value), codexImageModel: form.elements.codexImageModel.value }); await refresh(); say('운영 설정을 저장했습니다.'); } catch (error) { say(error.message); } };
 document.querySelector('#sample').onsubmit = async event => { event.preventDefault(); const input = Object.fromEntries(new FormData(event.target)); try { const result = await api('/api/sample/analyze', input); document.querySelector('#analysis').textContent = JSON.stringify(result.analysis, null, 2); const registry = await api('/api/sample', { ...input, rules: result.analysis.rules }); say('제안 규칙을 확인한 뒤 아래에서 승인하세요.'); await refresh(); } catch (error) { say(error.message); } };
 document.querySelector('#asset').onsubmit = async event => { event.preventDefault(); try { await api('/api/asset', Object.fromEntries(new FormData(event.target))); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };
 document.querySelector('#connector').onsubmit = async event => { event.preventDefault(); const input = Object.fromEntries(new FormData(event.target)); try { input.args = JSON.parse(input.args); await api('/api/connector', input); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };

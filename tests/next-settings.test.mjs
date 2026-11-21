@@ -15,6 +15,13 @@ test('operating settings enforce one to three months and image attempts', () => 
     assert.equal(loadSettings().revision, saved.revision);
     assert.throws(() => updateSettings({ maxImageGenerations: 4 }), /Invalid next settings/);
     assert.throws(() => updateSettings({ retentionMonths: 0 }), /Invalid next settings/);
+    assert.equal(loadSettings().codexImageModel, 'gpt-6-sol');
+    assert.equal(updateSettings({ codexImageModel: 'gpt-6.2-sol' }).codexImageModel, 'gpt-6.2-sol');
+    assert.equal(updateSettings({ codexImageModel: '' }).codexImageModel, '');
+    assert.throws(() => updateSettings({ codexImageModel: '--sandbox' }), /Invalid next settings/);
+    const legacy = { ...loadSettings() }; delete legacy.codexImageModel;
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(legacy));
+    assert.equal(loadSettings().codexImageModel, 'gpt-6-sol');
   } finally {
     if (previous === undefined) delete process.env.POSTGEN_NEXT_DIR; else process.env.POSTGEN_NEXT_DIR = previous;
     fs.rmSync(dir, { recursive: true, force: true });

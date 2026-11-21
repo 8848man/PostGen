@@ -6,7 +6,7 @@ import { normalizeUsage } from './usage.mjs';
 
 const schema = path.join(path.dirname(fileURLToPath(import.meta.url)), 'image-check.schema.json');
 
-export async function checkHostImage({ generatedPath, referencePaths = [], scene, request }, invoke = codexRun) {
+export async function checkHostImage({ generatedPath, referencePaths = [], scene, request, model = '' }, invoke = codexRun) {
   const prompt = [
     'Inspect the attached raster images. The FIRST image is the generated candidate; the remaining images are visual references.',
     'Judge whether the candidate clearly depicts the requested scene, follows the reference visual style, has no obvious visual artifacts, and has legible text if text is required.',
@@ -15,7 +15,7 @@ export async function checkHostImage({ generatedPath, referencePaths = [], scene
     `Scene: ${String(scene || '').slice(0, 2000)}`,
     request?.text ? `Image request: ${String(request.text).slice(0, 6000)}` : ''
   ].filter(Boolean).join('\n\n');
-  const { result, usage } = await invoke(prompt, schema, { imagePaths: [generatedPath, ...referencePaths], cwd: os.tmpdir(), timeoutMs: 180_000 });
+  const { result, usage } = await invoke(prompt, schema, { imagePaths: [generatedPath, ...referencePaths], cwd: os.tmpdir(), timeoutMs: 180_000, model });
   if (typeof result?.passed !== 'boolean' || typeof result?.reason !== 'string' || !result.reason.trim()) throw new Error('Codex image check returned an invalid result');
   return { check: { passed: result.passed, reason: result.reason.slice(0, 500) }, usage: normalizeUsage('codex', usage) };
 }
