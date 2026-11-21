@@ -23,6 +23,13 @@ main { max-width: 1800px; margin: auto; padding: 0 32px 80px; }
 .pick-card small, .source-item small, .job small { color: #566983; line-height: 1.4; }
 .pick-card span { font-size: 14px; line-height: 1.5; color: #465a76; }
 .pick-card em { width: max-content; font-style: normal; font-size: 12px; font-weight: 800; color: #1f56a1; background: #dceaff; border-radius: 999px; padding: 5px 9px; }
+.campaign-card.in-progress { border-color: #e3b361; background: #fff8ea; }
+.campaign-card.complete { border-color: #61a383; background: #effaf3; }
+.campaign-card .campaign-progress { width: max-content; max-width: 100%; padding: 5px 9px; border-radius: 999px; background: #e7edf7; font-size: 12px; font-weight: 800; color: #34445b; }
+.campaign-card.in-progress .campaign-progress { background: #fff0cc; color: #79530c; }
+.campaign-card.complete .campaign-progress { background: #d8f1e2; color: #17623d; }
+.tag-edit-row { display: flex; gap: 8px; margin: 10px 0 18px; }
+.tag-edit-row input { flex: 1; min-width: 0; }
 .source-detail { margin-top: 22px; }
 .source-item { border-top: 1px solid #dce6f2; padding-top: 16px; margin-top: 16px; }
 .source-item small { overflow-wrap: anywhere; }

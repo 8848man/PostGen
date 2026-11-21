@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft as saveDraft, recordModelUsage, setDraftEvaluation, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft as saveDraft, recordModelUsage, setDraftEvaluation, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
@@ -163,6 +163,22 @@ test('an uncertain platform submission cannot be silently retried', () => {
   assert.equal(state.jobs[0].status, 'registered');
   assert.equal(state.jobs[0].registration.recheckedAfterUnknown, true);
   assert.throws(() => confirmUnknownSchedule(state, id, { accountHandle: 'a', publishAt: '2026-11-08T00:00:00Z', reservationUrl: 'x', evidence: 'list', verified: true }), /Cannot change registered job/);
+});
+
+test('cancelled publication can be recorded manually or retried with fresh approval', () => {
+  let state = createJob(emptyState(), { accountId: 'a', audience: 'reader', goal: 'inform', sources: [source] });
+  const id = state.jobs[0].id;
+  state = setDraft(state, id, { title: 'title', body: 'body', tags: ['PostGen'], claims: [], images: [] });
+  state = cancelJob(state, id);
+  assert.throws(() => recordPublication(state, id, { postUrl: 'http://example.com/post' }), /Verified post URL/);
+  const published = recordPublication(state, id, { postUrl: 'https://example.com/post', finalTitle: 'title', finalBody: 'body' });
+  assert.equal(published.jobs[0].status, 'published');
+  assert.equal(published.jobs[0].publication.source, 'manual');
+  assert.throws(() => retryPublication(published, id), /Cannot change published job/);
+  state = retryPublication(state, id);
+  assert.equal(state.jobs[0].status, 'draft');
+  assert.equal(state.jobs[0].approval, null);
+  assert.deepEqual(state.jobs[0].draft.tags, ['PostGen']);
 });
 
 test('expired source copies can be restored for 14 days, then are purged', () => {

@@ -397,8 +397,15 @@ async function naverTagItems(frame) {
 
 export async function enterNaverTags(frame, page, tags) {
   if (!tags.length) return [];
-  const tagInput = frame.locator('input[placeholder*="태그"], [class*="tag"] input').filter({ visible: true });
-  if (await tagInput.count() !== 1) throw new Error('Naver tag field is unavailable or ambiguous');
+  const candidates = [
+    frame.locator('input[placeholder*="태그"]').filter({ visible: true }),
+    frame.locator('input[aria-label*="태그"]').filter({ visible: true }),
+    frame.locator('[class*="tag"] input').filter({ visible: true })
+  ];
+  const tagInput = await (async () => {
+    for (const candidate of candidates) if (await candidate.count() === 1) return candidate;
+    throw new Error('Naver tag field is unavailable or ambiguous; check the publish panel');
+  })();
   for (const tag of tags) {
     await tagInput.fill(tag);
     await tagInput.press('Enter');
@@ -421,8 +428,8 @@ export async function configurePlatformReservation(page, channel, at, tags = [])
     const frame = page.frameLocator('iframe#mainFrame');
     // exact: the header also has a "예약 발행 N건" button that opens the reservation list instead of the publish panel.
     await frame.getByRole('button', { name: '발행', exact: true }).first().click();
-    await enterNaverTags(frame, page, tags);
     await frame.locator('#open_public').check();
+    await enterNaverTags(frame, page, tags);
     // The radio input sits under its styled label, which intercepts pointer events.
     await frame.locator('label[for="radio_time2"]').click();
     if (!(await frame.locator('#radio_time2').isChecked())) throw new Error('Naver reservation mode was not selected');

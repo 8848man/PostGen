@@ -21,9 +21,10 @@ try {
   const source = { id: 'source-1', type: 'text', ref: 'test', text: '검토할 원본 본문입니다.', capturedAt: new Date().toISOString() };
   let state = createCampaign(emptyState(), { accounts, audience: '독자', sources: [source] });
   saveState(state, 0);
-  state = setDraft(state, state.jobs[0].id, { title: '네이버 글', body: '네이버 본문', claims: [], images: [] });
+  const standard = { set: 'naver-blog-post', sha256: 'a'.repeat(64) };
+  state = setDraft(state, state.jobs[0].id, { title: '네이버 글', body: '네이버 본문', tags: ['네이버'], claims: [], images: [], standard });
   saveState(state, 1);
-  state = setDraft(state, state.jobs[1].id, { title: '티스토리 글', body: '티스토리 본문', claims: [], images: [] });
+  state = setDraft(state, state.jobs[1].id, { title: '티스토리 글', body: '티스토리 본문', claims: [], images: [], standard });
   saveState(state, 2);
 
   child = spawn(process.execPath, [path.resolve('next/server.mjs')], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -36,6 +37,7 @@ try {
   await page.goto(launch);
   await page.locator('.channel-card').first().waitFor();
   assert.equal(await page.locator('.channel-card').count(), 2);
+  assert.match(await page.locator('.campaign-progress').innerText(), /0\/2/);
   assert.match(await page.locator('#sources').innerText(), /검토할 원본 본문/);
   await page.locator('.channel-card').filter({ hasText: '티스토리' }).click();
   await page.locator('#jobs').getByText('티스토리 본문').waitFor();
