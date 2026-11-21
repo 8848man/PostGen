@@ -72,6 +72,15 @@ function confirmUnverifiedStandard() {
     dialog.showModal();
   });
 }
+// Mirrors republishable in next-core.mjs; the server enforces the rule.
+const republishable = ['awaiting_registration','preparing','review_required','ready_to_register','expired','cancelled','failed','unknown','registered','verification_due'];
+// Next ten-minute mark at least an hour ahead (Naver reservations use ten-minute steps); keep the old time if it is still valid.
+function republishDefaultTime(job) {
+  const previous = Date.parse(job.schedule?.at || '');
+  if (previous > Date.now() + 60 * 60 * 1000 && new Date(previous).getMinutes() % 10 === 0) return localDateTime(new Date(previous));
+  const next = new Date(Date.now() + 60 * 60 * 1000); next.setSeconds(0, 0); next.setMinutes(Math.ceil(next.getMinutes() / 10) * 10);
+  return localDateTime(next);
+}
 async function registerBrowser(jobId, sessionId) {
   const output = await api('/api/registration/browser', { jobId, sessionId });
   say(output.result.verified ? '플랫폼 예약 등록을 확인했습니다.' : output.result.notSubmitted ? `태그나 발행 설정을 확인하지 못해 발행 버튼을 누르지 않았습니다: ${output.result.reason}` : `예약 결과를 확인할 수 없습니다. 플랫폼에서 중복 등록 여부를 확인하세요: ${output.result.reason}`);
@@ -158,10 +167,28 @@ async function refresh() {
         say('태그를 저장했습니다. 발행 창에서 개별 태그 등록을 확인합니다.');
       })); article.append(tagRow);
     }
-    if (['cancelled','failed','ready_to_register','unknown'].includes(job.status)) {
+    const canRepublish = job.draft && job.approval && republishable.includes(job.status);
+    if (canRepublish || ['cancelled','failed','ready_to_register','unknown'].includes(job.status)) {
       const recovery = document.createElement('section'); recovery.className = 'publish-panel';
       const heading = document.createElement('h4'); heading.textContent = '다시 시도'; recovery.append(heading);
-      if (['cancelled','failed'].includes(job.status) && job.draft) recovery.append(button('발행 다시 시도', async () => { if (!confirm('초안을 다시 검토하고 이 계정의 발행을 새로 승인하시겠습니까?')) return; await api('/api/publication/retry', { jobId: job.id }); say('초안 검토로 되돌렸습니다. 태그와 내용을 확인한 뒤 새 예약을 진행하세요.'); }));
+      if (canRepublish) {
+        const reason = job.submission?.reason || job.republishHistory?.at(-1)?.reason;
+        const note = document.createElement('p'); note.textContent = `승인된 글과 이미지를 그대로 쓰고 새 시각으로 예약 등록을 처음부터 다시 진행합니다.${reason ? ` 지난 오류: ${reason}` : ''}${job.republishHistory?.length ? ` (재발행 ${job.republishHistory.length}회)` : ''}`; recovery.append(note);
+        const row = document.createElement('div'); row.className = 'publish-row';
+        const time = document.createElement('input'); time.type = 'datetime-local'; time.step = '600'; time.setAttribute('aria-label', '재발행 공개 시각'); time.value = scheduleInputs.get(`republish:${job.id}`) || republishDefaultTime(job); time.oninput = () => scheduleInputs.set(`republish:${job.id}`, time.value);
+        row.append(time, button('재발행', async () => {
+          const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
+          const platformChecked = Boolean(job.submission?.startedAt || job.registration);
+          if (platformChecked && !confirm('이 글은 이미 플랫폼에 등록됐을 수 있습니다. 플랫폼의 예약 목록과 발행 글에 이 글이 없는 것을 확인했습니까? 확인하지 않고 재발행하면 중복 게시될 수 있습니다.')) return;
+          if (!platformChecked && !confirm(`승인된 글을 ${parsed.toLocaleString()}에 다시 예약 등록합니다. 진행할까요?`)) return;
+          await api('/api/publication/republish', { jobId: job.id, at: parsed.toISOString(), platformChecked });
+          scheduleInputs.delete(`republish:${job.id}`);
+          await api('/api/start', { jobId: job.id });
+          await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
+        }));
+        recovery.append(row);
+      }
+      if (['cancelled','failed'].includes(job.status) && job.draft) recovery.append(button('초안으로 되돌려 다시 시도', async () => { if (!confirm('초안을 다시 검토하고 이 계정의 발행을 새로 승인하시겠습니까?')) return; await api('/api/publication/retry', { jobId: job.id }); say('초안 검토로 되돌렸습니다. 태그와 내용을 확인한 뒤 새 예약을 진행하세요.'); }));
       if (job.status === 'ready_to_register') recovery.append(button('발행 설정 확인 후 다시 시도', async () => { const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (!sessionId) throw new Error('편집기 세션이 없습니다. 이 발행을 취소하고 초안에서 다시 시도하세요.'); await registerBrowser(job.id, sessionId); }));
       if (job.status === 'unknown' && account?.channel === 'naver') recovery.append(button('네이버 예약 목록 다시 확인', async () => { const output = await api('/api/registration/recheck', { jobId: job.id }); say(output.result.verified ? '예약 등록을 확인했습니다.' : `등록 여부를 확인하지 못했습니다: ${output.result.reason}`); }));
       article.append(recovery);

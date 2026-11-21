@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { republishJob, createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { projectNameForSources } from './post-metadata.mjs';
 import { evaluateDraft } from './evaluate.mjs';
@@ -320,6 +320,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/publication/manual') return json(res, 200, { state: mutateState(current => markManualPublication(current, input.jobId)) });
     if (url.pathname === '/api/publication/manual/undo') return json(res, 200, { state: mutateState(current => unmarkManualPublication(current, input.jobId)) });
     if (url.pathname === '/api/cancel') return json(res, 200, { state: mutateState(current => cancelJob(current, input.jobId)) });
+    if (url.pathname === '/api/publication/republish') return json(res, 200, { state: mutateState(current => republishJob(current, input.jobId, input.at, { platformChecked: input.platformChecked === true })) });
     if (url.pathname === '/api/publication/retry') return json(res, 200, { state: mutateState(current => retryPublication(current, input.jobId)) });
     return json(res, 404, { error: 'Not found' });
   } catch (error) { return json(res, 400, { error: String(error.message || error).slice(0, 500) }); }
