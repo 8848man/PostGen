@@ -42,6 +42,12 @@ try {
   await page.locator('.channel-card').filter({ hasText: '티스토리' }).click();
   await page.locator('#jobs').getByText('티스토리 본문').waitFor();
   assert.match(await page.locator('#jobs').innerText(), /티스토리 본문/);
+  await page.getByRole('checkbox', { name: '수동으로 발행함' }).check();
+  await page.waitForFunction(() => document.querySelector('.campaign-progress')?.textContent.includes('1/2'));
+  assert.match(await page.locator('.campaign-progress').innerText(), /1\/2/);
+  await page.getByRole('checkbox', { name: '수동으로 발행함' }).uncheck();
+  await page.waitForFunction(() => document.querySelector('.campaign-progress')?.textContent.includes('0/2'));
+  assert.match(await page.locator('.campaign-progress').innerText(), /0\/2/);
   await page.screenshot({ path: path.join(dir, 'review-dashboard.png'), fullPage: true });
   page.on('dialog', dialog => dialog.accept(dialog.type() === 'prompt' ? '출처 표현을 수정' : undefined));
   await page.getByText('글·이미지 편집 옵션').click();
