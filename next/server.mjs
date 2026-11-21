@@ -20,6 +20,7 @@ import { loadConnectors, registerConnector, inspectConnector, approveConnector }
 import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp } from './mcp-client.mjs';
 import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckNaverReservation } from './browser-adapter.mjs';
 import { loadSettings, updateSettings } from './settings.mjs';
+import { codexModelOptions } from './codex-models.mjs';
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 const token = crypto.randomBytes(24).toString('base64url');
@@ -89,7 +90,7 @@ const server = http.createServer(async (req, res) => {
       res.end(fs.readFileSync(path.join(webRoot, file))); return;
     }
     if (req.headers['x-postgen-token'] !== token) return json(res, 403, { error: 'Unauthorized' });
-    if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { state: statusState(), registry: loadRegistry(), connectors: loadConnectors(), settings: loadSettings() });
+    if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { state: statusState(), registry: loadRegistry(), connectors: loadConnectors(), settings: loadSettings(), codexModels: codexModelOptions(loadSettings().codexImageModel) });
     if (req.method === 'GET' && url.pathname === '/api/discover') return json(res, 200, discover(url.searchParams.get('workspace') || process.cwd(), { query: url.searchParams.get('query') || '' }));
     if (req.method !== 'POST' || req.headers.origin !== origin) return json(res, 404, { error: 'Not found' });
     const input = await inputJson(req);
@@ -200,7 +201,7 @@ const server = http.createServer(async (req, res) => {
       const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
       if (image.assetId && !asset) throw new Error('Selected asset unavailable');
       const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description, kind: image.kind });
-      const result = await runImageAttempts({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description }, { remaining, autoCheck: settings.autoImageCheck });
+      const result = await runImageAttempts({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description, model: settings.codexImageModel }, { remaining, autoCheck: settings.autoImageCheck });
       let state;
       try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, result.storedPath, result.attempts)); }
       catch (error) { await discardGeneratedImage(result.storedPath); throw error; }
@@ -222,7 +223,7 @@ const server = http.createServer(async (req, res) => {
       const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description, kind: image.kind });
       const referencePaths = [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])];
       if (new Set([...referencePaths, previousPath]).size > 5) throw new Error('Image attachments exceed the five-image host limit');
-      const result = await runImageAttempts({ request, referencePaths, scene: image.description, previousImagePath: previousPath, revisionInstructions: instructions }, { remaining, autoCheck: settings.autoImageCheck });
+      const result = await runImageAttempts({ request, referencePaths, scene: image.description, previousImagePath: previousPath, revisionInstructions: instructions, model: settings.codexImageModel }, { remaining, autoCheck: settings.autoImageCheck });
       let state;
       const attempts = result.attempts.map(attempt => ({ ...attempt, revisionInstructions: instructions }));
       try { state = mutateState(current => recordReplacementCandidate(current, job.id, image.id, previousPath, result.storedPath, attempts)); }

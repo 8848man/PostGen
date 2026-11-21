@@ -24,7 +24,7 @@ export function imageRunResult(stdout, { codexHome = process.env.CODEX_HOME || p
   return { path: file, usage: normalizeUsage('codex', finished.usage || null), imageUsage: { known: false, reason: 'Codex CLI did not report image-specific usage or subscription utilization' } };
 }
 
-export async function generateHostImage({ request, referencePaths = [], scene, feedback = '', previousImagePath = null, revisionInstructions = '' }, { binary = resolveCodexBinary(), timeoutMs = 300_000, run, codexHome } = {}) {
+export async function generateHostImage({ request, referencePaths = [], scene, feedback = '', previousImagePath = null, revisionInstructions = '', model = '' }, { binary = resolveCodexBinary(), timeoutMs = 300_000, run, codexHome } = {}) {
   if (typeof scene !== 'string' || !scene.trim()) throw new Error('Image scene is required');
   const references = [...new Set(referencePaths.map(file => fs.realpathSync(file)))];
   const previousImage = previousImagePath ? fs.realpathSync(previousImagePath) : null;
@@ -42,6 +42,7 @@ export async function generateHostImage({ request, referencePaths = [], scene, f
     'Do not try to move the generated file. Return JSON only: {"generatedPath":"absolute path returned by the image tool","toolAvailable":true}. If unavailable, return {"generatedPath":"","toolAvailable":false}.'
   ].join('\n\n');
   const args = ['exec', '--ignore-user-config', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', '--json', '--output-schema', schema];
+  if (model) args.push('-m', model);
   for (const file of attachments) args.push('--image', file);
   args.push('-');
   const execute = run || (() => new Promise((resolve, reject) => {
