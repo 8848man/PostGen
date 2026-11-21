@@ -79,7 +79,7 @@ button { background: #2061ba; color: white; border: 0; border-radius: 9px; paddi
 .publish-panel p { margin: 8px 0; line-height: 1.5; }
 .publish-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
 .publish-row input { max-width: 260px; }
-.publish-row button { background: #1d52af; }
+.publish-row button { background: #1d52af; white-space: nowrap; flex-shrink: 0; }
 .advanced-actions { margin: 16px 0; }
 .advanced-actions > summary, .image-options > summary { cursor: pointer; color: #526985; }
 .advanced-actions .actions { margin-top: 10px; }

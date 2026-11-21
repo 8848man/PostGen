@@ -488,6 +488,26 @@ export function retryPublication(state, id) {
   });
 }
 
+// Republish keeps the approved draft and images and starts reservation registration again at a new time.
+// A job that may already be on the platform (submission started or reservation verified) needs the user's check first.
+export const republishable = ['awaiting_registration','preparing','review_required','ready_to_register','expired','cancelled','failed','unknown','registered','verification_due'];
+export const republishNeedsPlatformCheck = job => Boolean(job.submission?.startedAt || job.registration);
+export function republishJob(state, id, at, { platformChecked = false } = {}, now = new Date()) {
+  return change(state, id, republishable, job => {
+    if (!job.draft || !job.approval?.at) throw new Error('Only an approved draft can be republished; retry from the draft instead');
+    if (job.approval.draftRevision !== job.draft.revision) throw new Error('The approved draft changed; review it again before publishing');
+    if (republishNeedsPlatformCheck(job) && !platformChecked) throw new Error('Check the platform reservation list and published posts before republishing');
+    if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
+    for (const image of job.draft.images) if (!image.generatedPath || !fs.existsSync(image.generatedPath)) throw new Error('Image file is missing; retry from the draft and make the image again');
+    job.republishHistory = [...(job.republishHistory || []), { at: now.toISOString(), previousStatus: job.status, previousScheduleAt: job.schedule?.at || null, reason: job.submission?.reason ? String(job.submission.reason).slice(0, 500) : null, platformChecked: republishNeedsPlatformCheck(job) }].slice(-10);
+    job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
+    job.editor = null;
+    job.submission = null;
+    job.registration = null;
+    job.status = 'awaiting_registration';
+  });
+}
+
 export function pruneOldSources(state, months = 3, now = new Date()) {
   if (!Number.isInteger(months) || months < 1 || months > 3) throw new Error('Retention must be 1–3 months');
   const next = structuredClone(validateState(state));
