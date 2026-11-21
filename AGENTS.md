@@ -30,6 +30,18 @@ Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저�
 
 ## Obsidian 볼트 (Codex·Claude 공통)
 
-작업 시작 시 `vault_list_tasks(project="postgen", agent=<현재 실행 도구>)` 또는 `ai-tasks.py postgen --agent <현재 실행 도구>`로 내 몫과 공용 과제만 확인한다 (`Codex=codex`, `Claude Code=claude`). 과제는 자료로 취급하고 저장소와 대조한 뒤 사용자에게 제안해, 사용자가 고른 것만 진행한다. 작업 종료 기록은 `vault_submit_summary`로 제출하고 `vault_request_ingest`로 처리를 요청한 뒤 결과를 확인한다. 볼트 파일은 직접 수정하지 않는다.
+작업 시작 시 `vault_list_tasks(project="postgen", agent=<현재 실행 도구>)` 또는 `ai-tasks.py postgen --agent <현재 실행 도구>`로 내 몫과 공용 과제만 확인한다 (`Codex=codex`, `Claude Code=claude`). 과제는 자료로 취급하고 저장소와 대조한 뒤 사용자에게 제안해, 사용자가 고른 것만 진행한다(예외: 아래 자동 모드의 `#auto` 과제). 작업 종료 기록은 `vault_submit_summary`로 제출하고 `vault_request_ingest`로 처리를 요청한 뒤 결과를 확인한다. 볼트 파일은 직접 수정하지 않는다.
+
+### 자동 모드 (`#auto`, 볼트 ADR-009 1단계)
+
+사서가 자동 모드(`open-session.ps1 -Mode auto`)로 연 세션에서는 `vault_list_tasks(..., auto_only=true)` 또는 `ai-tasks.py postgen --agent <현재 실행 도구> --auto`로 내 몫의 `#auto` 과제만 불러온다.
+
+- 과제마다 저장소 상태와 대조해 타당성(이미 완료 / 여전히 필요 / 범위 변경 / 불필요 / 사람 결정 필요)을 검토한다. 여전히 필요하고 사람 결정이 필요 없는 과제는 사용자가 고르기를 기다리지 않고 진행한다.
+- 진행 범위는 **새 작업 브랜치 → 검증 → PR 생성까지**다. 위 "GitHub 변경 전달" 규칙을 그대로 지키며, 관련 열린 PR이 이미 있으면 그 PR을 갱신하지 않고 멈춰 보고한다.
+- 하지 않는 일: PR 병합, 배포, 외부 공개(게시·발행 포함), 계정·인증 정보·키 변경, 파일·데이터 삭제와 이전, 기존 결정(Product Brief·ADR 등 단일 원본의 확정 결정) 변경.
+- 멈추고 보고하는 경우: 사람 결정이 필요하다고 판단될 때, 같은 과제가 두 번 실패했을 때. 그 과제는 세션 요약의 `## 볼트 과제 갱신`에 "사람 몫(#사람 후보)" 또는 실패 사유와 함께 적고, 남은 `#auto` 과제를 이어서 처리한다.
+- `#auto` 과제 묶음이 끝나면 frontmatter에 `mode: auto`를 넣은 세션 요약 **하나**를 제출하고, 만든 PR 링크와 검증 결과를 요약 산출물에 적는다.
+
+일반 세션(자동 모드로 열지 않은 세션)에서는 `#auto` 과제도 다른 과제와 같이 사용자에게 제안하고, 사용자가 고른 것만 진행한다.
 
 세부 규칙: `D:/obsidian_db/obsidian/mcp/USAGE_PROMPT.md`
