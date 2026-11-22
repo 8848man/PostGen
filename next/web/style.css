@@ -27,6 +27,7 @@ main { max-width: 1800px; margin: auto; padding: 0 32px 80px; }
 .campaign-card.complete { border-color: #61a383; background: #effaf3; }
 .campaign-card .campaign-progress { width: max-content; max-width: 100%; padding: 5px 9px; border-radius: 999px; background: #e7edf7; font-size: 12px; font-weight: 800; color: #34445b; }
 .campaign-card.in-progress .campaign-progress { background: #fff0cc; color: #79530c; }
+.campaign-card.scheduled .campaign-progress { background: #dbeafe; color: #1e4f99; }
 .campaign-card.complete .campaign-progress { background: #d8f1e2; color: #17623d; }
 .tag-edit-row { display: flex; gap: 8px; margin: 10px 0 18px; }
 .tag-edit-row input { flex: 1; min-width: 0; }

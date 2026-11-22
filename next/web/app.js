@@ -73,6 +73,8 @@ function confirmUnverifiedStandard() {
   });
 }
 // Mirrors republishable in next-core.mjs; the server enforces the rule.
+// 플랫폼 예약 등록이 확인됐지만 아직 발행 확인 전인 상태
+const scheduledStatuses = ['registered','verification_due'];
 const republishable = ['awaiting_registration','preparing','review_required','ready_to_register','expired','cancelled','failed','unknown','registered','verification_due'];
 // Next ten-minute mark at least an hour ahead (Naver reservations use ten-minute steps); keep the old time if it is still valid.
 function republishDefaultTime(job) {
@@ -120,11 +122,14 @@ async function refresh() {
   const campaignList = document.querySelector('#campaigns'); campaignList.replaceChildren();
   for (const [key, group] of sortedCampaigns) {
     const published = group.filter(job => job.status === 'published').length;
-    const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card campaign-card ${published === group.length ? 'complete' : published ? 'in-progress' : ''} ${key === selectedCampaignId ? 'selected' : ''}`;
+    const scheduled = group.filter(job => scheduledStatuses.includes(job.status)).length;
+    const stage = published === group.length ? 'complete' : published + scheduled === group.length ? 'scheduled' : published || scheduled ? 'in-progress' : '';
+    const stageLabel = { complete: '✓ 모든 채널 발행 완료', scheduled: published ? '⏱ 남은 채널 예약 발행 등록됨' : '⏱ 예약 발행 등록됨', 'in-progress': published ? '◐ 일부 채널 발행 완료' : '◔ 일부 채널 예약 등록됨', '': '○ 발행 완료 전' }[stage];
+    const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card campaign-card ${stage} ${key === selectedCampaignId ? 'selected' : ''}`;
     const source = group[0].sources[0];
     const title = document.createElement('strong'); title.textContent = excerpt(source?.text || group[0].draft?.title || '원본 사본 만료', 55);
     const meta = document.createElement('small'); meta.textContent = `${group.length}개 채널 글 · ${new Date(group[0].createdAt).toLocaleDateString('ko-KR')} · ${group[0].sources.length}개 출처`;
-    const progress = document.createElement('span'); progress.className = 'campaign-progress'; progress.textContent = `${published === group.length ? '✓ 모든 채널 발행 완료' : published ? '◐ 일부 채널 발행 완료' : '○ 발행 완료 전'} · ${published}/${group.length}`;
+    const progress = document.createElement('span'); progress.className = 'campaign-progress'; progress.textContent = `${stageLabel}${scheduled ? ` · 예약 ${scheduled}` : ''} · 발행 ${published}/${group.length}`;
     item.append(title, meta, progress); item.onclick = () => { selectedCampaignId = key; selectedJobId = null; refresh().catch(error => say(error.message)); }; campaignList.append(item);
   }
   const group = campaigns.get(selectedCampaignId) || [];

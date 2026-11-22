@@ -60,7 +60,24 @@ try {
   await page.getByRole('button', { name: '발행', exact: true }).click();
   await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].status, 'awaiting_registration');
-  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation\n');
+  const progressFor = async statuses => {
+    await page.unroute('**/api/state');
+    await page.route('**/api/state', async route => { const response = await route.fetch(); const body = await response.json(); body.state.jobs.forEach((job, index) => { job.status = statuses[index]; }); await route.fulfill({ response, json: body }); });
+    await page.reload();
+    const progress = page.locator('.campaign-card .campaign-progress');
+    await progress.waitFor();
+    return { text: await progress.innerText(), className: await page.locator('.campaign-card').getAttribute('class') };
+  };
+  let card = await progressFor(['registered', 'verification_due']);
+  assert.match(card.text, /예약 발행 등록됨 · 예약 2 · 발행 0\/2/);
+  assert.match(card.className, /\bscheduled\b/);
+  card = await progressFor(['published', 'registered']);
+  assert.match(card.text, /남은 채널 예약 발행 등록됨 · 예약 1 · 발행 1\/2/);
+  assert.match(card.className, /\bscheduled\b/);
+  card = await progressFor(['registered', 'draft']);
+  assert.match(card.text, /일부 채널 예약 등록됨 · 예약 1 · 발행 0\/2/);
+  assert.match(card.className, /\bin-progress\b/);
+  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation, scheduled campaign state\n');
 } finally {
   if (browser) await browser.close();
   if (child) child.kill();
