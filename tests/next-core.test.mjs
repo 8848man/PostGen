@@ -49,6 +49,7 @@ test('one publish action connects every candidate and starts reservation without
     state = recordImageCandidate(state, id, 'two', files[1], [{ check: { passed: true, reason: 'ok' } }]);
     const now = new Date('2026-11-17T00:00:00Z');
     assert.throws(() => publishDraftReservation(state, id, '2026-11-17T00:05:00Z', {}, now), /ten minutes/);
+    assert.throws(() => publishDraftReservation(state, id, '2026-11-18T00:07:00Z', {}, now), /ten-minute increments/);
     assert.equal(state.jobs[0].draft.images[0].pendingPath, files[0]);
     const result = publishDraftReservation(state, id, '2026-11-18T00:00:00Z', {}, now);
     assert.equal(result.jobs[0].status, 'awaiting_registration');
@@ -89,6 +90,7 @@ test('account approval, expiry, and editor checks gate publication', () => {
   assert.throws(() => approveDraft(state, id), /explicit acknowledgement/);
   state = approveDraft(state, id, { conflictAcknowledged: true });
   const now = new Date('2026-11-06T00:00:00Z');
+  assert.throws(() => scheduleJob(state, id, '2026-11-07T00:07:00Z', now), /ten-minute increments/);
   state = scheduleJob(state, id, '2026-11-07T00:00:00Z', now);
   assert.equal(state.jobs[0].status, 'awaiting_registration');
   state = startPreparation(state, id, new Date('2026-11-06T01:00:00Z'));

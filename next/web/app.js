@@ -256,11 +256,13 @@ async function refresh() {
       const title = document.createElement('h4'); title.textContent = '발행'; panel.append(title);
       const note = document.createElement('p'); note.textContent = `${account?.handle || job.accountHandle} · 이미지 ${job.draft.images.length}장 · 발행을 누르면 표시된 글과 이미지를 함께 승인하고 지정 시각 예약 등록을 시작합니다.`; panel.append(note);
       const row = document.createElement('div'); row.className = 'publish-row';
-      const time = document.createElement('input'); time.type = 'datetime-local'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id) || localDateTime(new Date(Date.now() + 24 * 60 * 60 * 1000)); time.oninput = () => scheduleInputs.set(job.id, time.value);
+      const defaultTime = new Date(Date.now() + 24 * 60 * 60 * 1000); defaultTime.setSeconds(0, 0); defaultTime.setMinutes(Math.ceil(defaultTime.getMinutes() / 10) * 10);
+      const time = document.createElement('input'); time.type = 'datetime-local'; time.step = '600'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id) || localDateTime(defaultTime); time.oninput = () => scheduleInputs.set(job.id, time.value);
       let conflict = null;
       const missing = job.draft.images.filter(image => !image.generatedPath && !image.pendingPath).length;
       const publish = button('발행', async () => {
         const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
+        if (parsed.getTime() % (10 * 60_000) !== 0) throw new Error('공개 시각은 10분 단위로 지정하세요.');
         const at = parsed.toISOString();
         const standardUnverifiedAcknowledged = job.status === 'draft' && !hasDraftStandard(job) ? await confirmUnverifiedStandard() : false;
         if (job.status === 'draft' && !hasDraftStandard(job) && !standardUnverifiedAcknowledged) return;
