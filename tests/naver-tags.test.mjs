@@ -10,6 +10,8 @@ test('Naver body rejects text that the editor can interpret as a tag', () => {
   for (const body of ['PR 15번 기록', 'C# 언어', '제목 # 기호']) {
     assert.doesNotThrow(() => assertNaverBodyHasNoHashtags(body));
   }
+  assert.doesNotThrow(() => assertNaverBodyHasNoHashtags('#태그1 #태그2\n본문', ['태그1', '태그2']));
+  assert.throws(() => assertNaverBodyHasNoHashtags('#태그1 #태그2\n본문 #15', ['태그1', '태그2']), /unapproved/);
 });
 
 test('draft prompt keeps hashtag-like references out of the body', () => {

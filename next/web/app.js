@@ -166,7 +166,8 @@ async function refresh() {
         const { lock } = await api('/api/draft/lock', { jobId: job.id });
         try { await api('/api/draft', { jobId: job.id, draft: { ...job.draft, tags }, lockToken: lock.token, expectedDraftRevision: lock.draftRevision }); }
         finally { await api('/api/draft/unlock', { jobId: job.id, token: lock.token }); }
-        say('태그를 저장했습니다. 발행 창에서 개별 태그 등록을 확인합니다.');
+        await refresh();
+        say('태그를 저장했습니다. 네이버 글은 본문 첫 줄에 태그가 표시됩니다.');
       })); article.append(tagRow);
     }
     const canRepublish = job.draft && job.approval && republishable.includes(job.status);

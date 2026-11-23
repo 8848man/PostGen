@@ -147,7 +147,7 @@ const server = http.createServer(async (req, res) => {
       output.draft.standard = standardRecord(standard);
       usageEntries.push({ step, usage: output.usage });
       mutateState(latest => recordModelUsage(latest, job.id, step, output.usage));
-      const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics));
+      const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics, { channel: account.channel }));
       const usage = summarizeUsage(usageEntries);
       return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
     }
@@ -182,7 +182,9 @@ const server = http.createServer(async (req, res) => {
       if (existingJob.status !== 'draft') throw new Error('Only an existing draft can be edited');
       if (existingJob.status === 'draft' && (!input.lockToken || !Number.isInteger(input.expectedDraftRevision))) throw new Error('Draft edit lock and revision required');
       const options = existingJob.status === 'draft' ? { draftLockToken: input.lockToken, expectedDraftRevision: input.expectedDraftRevision } : undefined;
-      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, { ...input.draft, standard: existingJob.draft?.standard || null }, input.diagnostics || []), options) });
+      const account = loadRegistry().accounts.find(item => item.id === existingJob.accountId);
+      if (!account) throw new Error('Account no longer exists');
+      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, { ...input.draft, standard: existingJob.draft?.standard || null }, input.diagnostics || [], { channel: account.channel }), options) });
     }
     if (url.pathname === '/api/images/approve-plan') {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');

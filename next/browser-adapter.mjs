@@ -118,7 +118,7 @@ export async function fillNativeEditorPage(page, job) {
     return { editorUrl: page.url(), visibleAccount: job.accountHandle, title, body, uploadedImages, verification: 'browser-readback' };
   }
   if (job.channel === 'naver') {
-    assertNaverBodyHasNoHashtags(job.draft.body);
+    assertNaverBodyHasNoHashtags(job.draft.body, job.draft.tags || []);
     const frameInfo = page.frames().find(frame => frame.name() === 'mainFrame');
     if (!frameInfo || new URL(frameInfo.url()).searchParams.get('blogId') !== job.accountHandle) throw new Error('Naver editor account mismatch');
     const frame = page.frameLocator('iframe#mainFrame');
@@ -396,8 +396,11 @@ async function naverTagItems(frame) {
   });
 }
 
-export function assertNaverBodyHasNoHashtags(body) {
-  if (/(^|[^\p{L}\p{N}_])#[\p{L}\p{N}_]+/u.test(body)) throw new Error('Naver body contains a hashtag-like # pattern; remove or rewrite it before editor input');
+export function assertNaverBodyHasNoHashtags(body, tags = []) {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  const approvedLine = tags.map(tag => `#${tag}`).join(' ');
+  if (approvedLine && lines[0] === approvedLine) lines.shift();
+  if (/(^|[^\p{L}\p{N}_])#[\p{L}\p{N}_]+/u.test(lines.join('\n'))) throw new Error('Naver body contains an unapproved hashtag-like # pattern; remove or rewrite it before editor input');
 }
 
 export async function verifyNaverTags(frame, tags) {
@@ -410,7 +413,10 @@ export async function verifyNaverTags(frame, tags) {
 }
 
 export async function enterNaverTags(frame, page, tags) {
-  if (!tags.length) return verifyNaverTags(frame, tags);
+  const initial = await naverTagItems(frame);
+  if (initial.some(tag => !tags.includes(tag))) return verifyNaverTags(frame, tags);
+  const missing = tags.filter(tag => !initial.includes(tag));
+  if (!missing.length) return verifyNaverTags(frame, tags);
   const candidates = [
     frame.locator('input[placeholder*="태그"]').filter({ visible: true }),
     frame.locator('input[aria-label*="태그"]').filter({ visible: true }),
@@ -420,7 +426,7 @@ export async function enterNaverTags(frame, page, tags) {
     for (const candidate of candidates) if (await candidate.count() === 1) return candidate;
     throw new Error('Naver tag field is unavailable or ambiguous; check the publish panel');
   })();
-  for (const tag of tags) {
+  for (const tag of missing) {
     await tagInput.fill(tag);
     await tagInput.press('Enter');
     let found = false;
@@ -538,7 +544,7 @@ export async function recheckNaverReservation(job) {
 export async function submitPlatformReservation(sessionId, job, beforeSubmit = async () => {}) {
   const session = sessions.get(sessionId);
   if (!session || session.jobId !== job.id || session.channel !== job.channel || session.accountHandle !== job.accountHandle) throw new Error('Editor session does not match approved account');
-  if (job.channel === 'naver') assertNaverBodyHasNoHashtags(job.draft.body);
+  if (job.channel === 'naver') assertNaverBodyHasNoHashtags(job.draft.body, job.draft.tags || []);
   const editor = await readEditorSession(sessionId);
   if (editor.title.trim() !== job.draft.title.trim() || editor.body.trim() !== job.draft.body.trim()) throw new Error('Editor content differs from approved draft');
   if (!session.mapping && job.draft.images.length) {

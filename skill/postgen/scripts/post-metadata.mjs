@@ -23,3 +23,19 @@ export function cleanTags(tags) {
   if (result.some(tag => tag.length > 30 || /[\r\n]/.test(tag)) || new Set(result.map(tag => tag.toLocaleLowerCase('ko-KR'))).size !== result.length) throw new Error('Tags must be unique short phrases');
   return result;
 }
+
+export function naverTagLine(tags) {
+  if (tags.some(tag => !/^[\p{L}\p{N}_]+$/u.test(tag))) throw new Error('Naver body tags must be single words without spaces or punctuation');
+  return tags.map(tag => `#${tag}`).join(' ');
+}
+
+export function withNaverTagLine(body, tags, previousTags = []) {
+  const line = naverTagLine(tags);
+  const oldLine = naverTagLine(previousTags);
+  const normalized = body.replace(/\r\n/g, '\n');
+  const [first, ...rest] = normalized.split('\n');
+  const hadLine = Boolean(first && (first === line || first === oldLine));
+  const content = hadLine ? rest.join('\n') : normalized;
+  if (!content.trim()) throw new Error('Naver draft body needs content after the tag line');
+  return { body: line ? `${line}\n${content}` : content, paragraphShift: Number(Boolean(line)) - Number(hadLine) };
+}
