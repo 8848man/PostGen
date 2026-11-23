@@ -37,7 +37,11 @@ function run(args) {
     return created;
   }
   if (command === 'plan') { const plan = input(); const current = loadState(); return update(state => setCampaignPlan(state, job(current, id).campaignId, plan)).jobs.filter(item => item.campaignId === job(current, id).campaignId).map(item => item.id); }
-  if (command === 'draft') return job(update(state => setDraft(state, id, input())), id);
+  if (command === 'draft') {
+    const registry = loadRegistry(), current = loadState(), target = job(current, id);
+    const account = registry.accounts.find(item => item.id === target.accountId);
+    return job(update(state => setDraft(state, id, input(), [], { channel: account?.channel || null })), id);
+  }
   if (command === 'approve') return job(update(state => approveDraft(state, id, { conflictAcknowledged: args.includes('--conflicts-reviewed') })), id);
   if (command === 'schedule') return job(update(state => scheduleJob(state, id, args[2])), id);
   throw new Error('Usage: next-cli.mjs list|show ID|create < JSON|plan ID < JSON|draft ID < JSON|approve ID [--conflicts-reviewed]|schedule ID ISO_TIME');

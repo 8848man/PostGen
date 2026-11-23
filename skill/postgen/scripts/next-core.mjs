@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { dataDir } from './profile.mjs';
-import { cleanTags, projectNameForSources, projectTitle } from './post-metadata.mjs';
+import { cleanTags, projectNameForSources, projectTitle, withNaverTagLine } from './post-metadata.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
@@ -183,10 +183,13 @@ export function setDraftEvaluation(state, id, evaluation) {
   });
 }
 
-export function setDraft(state, id, draft, diagnostics = []) {
+export function setDraft(state, id, draft, diagnostics = [], { channel = null } = {}) {
   return change(state, id, ['selected','draft'], job => {
     if (!nonempty(draft?.title, 300)) throw new Error('Draft title is required');
-    job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags: cleanTags(draft.tags || []), body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
+    const tags = cleanTags(draft.tags || []);
+    const tagged = channel === 'naver' ? withNaverTagLine(draft.body, tags, job.draft?.tags || []) : { body: draft.body, paragraphShift: 0 };
+    const images = (draft.images || []).map(image => ({ ...image, afterParagraph: image.afterParagraph + tagged.paragraphShift }));
+    job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags, body: tagged.body, claims: draft.claims || [], images, headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
     job.review = null;
