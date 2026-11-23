@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft as saveDraft, recordModelUsage, setDraftEvaluation, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
+import { emptyState, createJob, createCampaign, setCampaignPlan, setDraft as saveDraft, recordModelUsage, setDraftEvaluation, setImageProvider, approveImagePlan, attachGeneratedImage, recordImageCandidate, publishDraftReservation, approveDraft, reviewDraft, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from '../next/core.mjs';
 
 const source = { id: 's1', type: 'text', ref: 'user-input', text: '근거 문장' };
 const draft = { title: '제목', body: '본문', claims: [], images: [{ id: 'image-1', afterParagraph: 1, description: '테스트 그림' }] };
@@ -101,10 +101,57 @@ test('account approval, expiry, and editor checks gate publication', () => {
   assert.throws(() => confirmPlatformSchedule(state, id, { accountHandle: 'wrong', publishAt: '2026-11-07T00:00:00Z', remoteId: 'r1', evidence: 'receipt', verified: true }), /account, time/);
   state = confirmPlatformSchedule(state, id, { accountHandle: 'account-1', publishAt: '2026-11-07T00:00:00Z', remoteId: 'r1', evidence: 'receipt', verified: true });
   assert.equal(state.jobs[0].status, 'registered');
+  assert.equal(refreshDue(state, new Date('2026-11-06T23:59:00Z')).jobs[0].status, 'registered');
   state = refreshDue(state, new Date('2026-11-07T01:00:00Z'));
-  assert.equal(state.jobs[0].status, 'verification_due');
+  assert.equal(state.jobs[0].status, 'published');
+  assert.equal(state.jobs[0].publication.source, 'implicit');
+  assert.equal(state.jobs[0].publication.postUrl, null);
   state = recordPublication(state, id, { postUrl: 'https://example.com/post', source: 'user' }, new Date('2026-11-07T01:00:00Z'));
   assert.equal(state.jobs[0].status, 'published');
+  assert.equal(state.jobs[0].publication.source, 'user');
+  assert.throws(() => recordPublication(state, id, { postUrl: 'https://example.com/other' }, new Date('2026-11-07T01:00:00Z')), /Cannot change published/);
+});
+
+test('passed verified reservation is implicitly published and the user can decline it', () => {
+  let state = createJob(emptyState(), { accountId: 'a', audience: '독자', goal: '설명', sources: [source] });
+  const id = state.jobs[0].id;
+  state = approveDraft(setDraft(state, id, { ...draft, images: [] }), id);
+  state = scheduleJob(state, id, '2026-01-02T00:00:00Z', new Date('2026-01-01T00:00:00Z'));
+  state = startPreparation(state, id, new Date('2026-01-01T01:00:00Z'));
+  state = recordAutomationError(state, id, { step: 'prepare-browser', stage: '본문 입력', message: '[본문 입력] dropped line' }, new Date('2026-01-01T01:05:00Z'));
+  assert.equal(state.jobs[0].automationError.stage, '본문 입력');
+  assert.equal(state.jobs[0].automationError.status, 'preparing');
+  state = reviewPreparation(state, id, { editorUrl: 'https://example.com/edit', visibleAccount: 'a', title: '제목', body: '본문' });
+  assert.equal(state.jobs[0].automationError, undefined);
+  state = beginScheduleSubmission(state, id, new Date('2026-01-01T02:00:00Z'));
+  state = confirmPlatformSchedule(state, id, { accountHandle: 'a', publishAt: '2026-01-02T00:00:00Z', remoteId: 'r1', evidence: 'receipt', verified: true });
+  // Jobs already waiting in verification_due from before this rule are also completed.
+  state.jobs[0].status = 'verification_due';
+  state = refreshDue(state, new Date('2026-01-02T00:00:00Z'));
+  assert.equal(state.jobs[0].status, 'published');
+  assert.equal(state.jobs[0].publication.previousStatus, 'verification_due');
+  state = declineImplicitPublication(state, id);
+  assert.equal(state.jobs[0].status, 'verification_due');
+  assert.equal(state.jobs[0].publication, null);
+  const revision = state.revision;
+  state = refreshDue(state, new Date('2026-01-03T00:00:00Z'));
+  assert.equal(state.jobs[0].status, 'verification_due');
+  assert.equal(state.revision, revision);
+  state = recordPublication(state, id, { postUrl: 'https://example.com/post' }, new Date('2026-01-03T00:00:00Z'));
+  assert.throws(() => declineImplicitPublication(state, id), /Only an implicit/);
+});
+
+test('unverified or unknown reservations are not implicitly published', () => {
+  let state = createJob(emptyState(), { accountId: 'a', audience: '독자', goal: '설명', sources: [source] });
+  const id = state.jobs[0].id;
+  state = approveDraft(setDraft(state, id, { ...draft, images: [] }), id);
+  state = scheduleJob(state, id, '2026-01-02T00:00:00Z', new Date('2026-01-01T00:00:00Z'));
+  state = startPreparation(state, id, new Date('2026-01-01T01:00:00Z'));
+  state = reviewPreparation(state, id, { editorUrl: 'https://example.com/edit', visibleAccount: 'a', title: '제목', body: '본문' });
+  state = beginScheduleSubmission(state, id, new Date('2026-01-01T02:00:00Z'));
+  state = markScheduleUnknown(state, id, 'list unreadable');
+  state = refreshDue(state, new Date('2026-01-03T00:00:00Z'));
+  assert.equal(state.jobs[0].status, 'unknown');
 });
 
 test('seven-day missed preparation expires', () => {
