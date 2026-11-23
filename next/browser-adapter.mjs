@@ -317,6 +317,14 @@ export async function openEditor(job, editorUrl, mapping = null) {
   const url = new URL(editorUrl);
   const allowed = channels[job.channel];
   if (!allowed || url.protocol !== 'https:' || !allowed(url.hostname)) throw new Error('Editor URL is not allowed for this channel');
+  // A republish can revisit the same account while its previous editor context is still open.
+  // Close only this job's old editor before launching the persistent profile again.
+  for (const [id, session] of sessions) {
+    if (session.jobId !== job.id) continue;
+    if (session.attached) await session.page.close();
+    else await session.context.close();
+    sessions.delete(id);
+  }
   const cdpEndpoint = process.env.POSTGEN_BROWSER_CDP_ENDPOINT || process.env.POSTGEN_EDGE_CDP_ENDPOINT;
   const attached = Boolean(cdpEndpoint);
   const { context } = attached

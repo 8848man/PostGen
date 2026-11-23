@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { addAccount, emptyRegistry, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
-import { createCampaign, emptyState, saveState, setDraft } from '../next/core.mjs';
+import { createCampaign, emptyState, loadState, saveState, setDraft, startPreparation } from '../next/core.mjs';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'postgen-review-'));
 process.env.POSTGEN_DATA_DIR = dir;
@@ -60,6 +60,17 @@ try {
   await page.getByRole('button', { name: '발행', exact: true }).click();
   await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].status, 'awaiting_registration');
+  await page.getByRole('button', { name: '재발행', exact: true }).click();
+  await page.getByText('재발행 1회', { exact: false }).waitFor();
+  assert.equal(loadState().jobs[1].republishHistory.length, 1);
+  const beforeRecovery = loadState();
+  saveState(startPreparation(beforeRecovery, beforeRecovery.jobs[1].id), beforeRecovery.revision);
+  await page.reload();
+  await page.locator('.channel-card').filter({ hasText: '티스토리' }).click();
+  await page.getByText('글·이미지 편집 옵션').click();
+  await page.getByRole('button', { name: '편집기 다시 열기' }).waitFor();
+  await page.getByRole('button', { name: '편집기 다시 열기' }).click();
+  await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
   process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation\n');
 } finally {
   if (browser) await browser.close();

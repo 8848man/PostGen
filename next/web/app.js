@@ -38,7 +38,7 @@ function button(label, action, blockedReason = null) {
     if (reason) return say(reason);
     running = true;
     try { await action(); await refresh(); }
-    catch (error) { say(error.message); }
+    catch (error) { say(error.message, 60_000); }
     finally { running = false; }
   };
   return element;
@@ -182,11 +182,14 @@ async function refresh() {
         row.append(time, button('재발행', async () => {
           const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
           const platformChecked = Boolean(job.submission?.startedAt || job.registration);
-          if (platformChecked && !confirm('이 글은 이미 플랫폼에 등록됐을 수 있습니다. 플랫폼의 예약 목록과 발행 글에 이 글이 없는 것을 확인했습니까? 확인하지 않고 재발행하면 중복 게시될 수 있습니다.')) return;
-          if (!platformChecked && !confirm(`승인된 글을 ${parsed.toLocaleString()}에 다시 예약 등록합니다. 진행할까요?`)) return;
+          if (platformChecked && !confirm('이 글은 이미 플랫폼에 등록됐을 수 있습니다. 플랫폼의 예약 목록과 발행 글에 이 글이 없는 것을 확인했습니까? 확인하지 않고 재발행하면 중복 게시될 수 있습니다.')) return say('재발행을 취소했습니다.');
+          if (!platformChecked && !confirm(`승인된 글을 ${parsed.toLocaleString()}에 다시 예약 등록합니다. 진행할까요?`)) return say('재발행을 취소했습니다.');
           await api('/api/publication/republish', { jobId: job.id, at: parsed.toISOString(), platformChecked });
           scheduleInputs.delete(`republish:${job.id}`);
+          say('재발행 예약을 저장했습니다. 편집기를 준비합니다.', 60_000);
+          await refresh();
           await api('/api/start', { jobId: job.id });
+          await refresh();
           await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
         }));
         recovery.append(row);
@@ -301,6 +304,10 @@ async function refresh() {
     if (['awaiting_registration','due'].includes(job.status)) actions.append(button('플랫폼 예약 등록 재개', async () => { await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
     if (job.status === 'preparing' && !(account?.channel === 'naver' && job.draft.tags?.length)) actions.append(button('MCP 초안 입력', async () => { const available = cache.connectors.servers.filter(item => item.approvedFingerprint); const connectorId = prompt(`허용된 서버 ID를 선택하세요:\n${available.map(item => `${item.id}: ${item.name}`).join('\n')}`); const toolName = connectorId && prompt('초안 입력 도구 이름'); if (connectorId && toolName) { const result = await api('/api/prepare-mcp', { jobId: job.id, connectorId, toolName }); say(JSON.stringify(result.result).slice(0,300)); } }));
     if (job.status === 'preparing') actions.append(button('로그인 후 재개', async () => { const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (!sessionId) return say('편집기 세션이 없어 다시 열어야 합니다.'); await preparedBrowser(job.id, await api('/api/prepare-browser/resume', { jobId: job.id, sessionId })); }));
+    if (job.status === 'preparing') actions.append(button('편집기 다시 열기', async () => {
+      sessionStorage.removeItem(`editor:${job.id}`);
+      await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
+    }));
     if (job.status === 'preparing') actions.append(button('수동 편집기 검수 기록', async () => { const editorUrl = prompt('실제 편집기 URL'), visibleAccount = prompt('화면에 보이는 계정명', job.accountHandle), title = prompt('실제 편집기 제목'), body = prompt('실제 편집기 본문'); const uploadedImages = job.draft.images.length ? prompt('화면에서 업로드와 위치를 확인한 이미지 ID를 쉼표로 구분해 입력', '')?.split(',').map(s => s.trim()) || [] : []; if (editorUrl && visibleAccount && title && body) await api('/api/review', { jobId: job.id, editor: { editorUrl, visibleAccount, title, body, uploadedImages } }); }));
     if (job.status === 'expired') actions.append(button('재검토 후 재예약', async () => { const at = prompt('새 예약 시각 (ISO 8601)'); if (at && confirm('사실·링크를 다시 확인하고 이 계정의 글을 재승인합니까?')) await api('/api/reschedule', { jobId: job.id, at, factsAndLinksReviewed: true }); }));
     if (job.status === 'review_required') actions.append(button('편집기 변경 재검토·승인', async () => { if (!confirm('편집기에서 달라진 제목·본문의 사실 주장과 링크를 다시 확인하고, 이 계정의 수정본을 승인합니까?')) return; await api('/api/review-changes', { jobId: job.id, factsAndLinksReviewed: true }); const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (sessionId) await registerBrowser(job.id, sessionId); }));
