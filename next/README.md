@@ -25,7 +25,7 @@ Windows에서는 저장소 루트의 `start-postgen-review.cmd`를 더블클릭�
 사용자의 작업 표준 라이브러리(Assets Manager)를 연결하면, 초안 생성마다 채널의 세트(네이버 기본 `naver-blog-post`)를 라이브러리 명령줄로 받아 쓴다. MCP 서버는 필요 없다.
 
 ```powershell
-$env:POSTGEN_ASSETS_CLI='D:\projects\assets\app\core\cli.py'   # 없으면 연결하지 않음
+$env:POSTGEN_ASSETS_CLI='D:\projects\assets_manager\app\core\cli.py'   # 없으면 연결하지 않음
 # 선택: $env:POSTGEN_ASSETS_SET_NAVER='naver-blog-post'; $env:POSTGEN_ASSETS_PYTHON='python'
 npm run next:chrome
 ```

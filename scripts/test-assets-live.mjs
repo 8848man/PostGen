@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const cli = process.env.POSTGEN_ASSETS_CLI || path.resolve(repositoryRoot, '..', 'assets', 'app', 'core', 'cli.py');
+const cli = process.env.POSTGEN_ASSETS_CLI || path.resolve(repositoryRoot, '..', 'assets_manager', 'app', 'core', 'cli.py');
 if (!fs.existsSync(cli)) {
   throw new Error(`Assets Manager CLI not found: ${cli}. Set POSTGEN_ASSETS_CLI to its path.`);
 }
