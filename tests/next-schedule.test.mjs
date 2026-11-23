@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { seoulScheduleParts, reservationReceiptMatches, naverReservationListCount } from '../next/browser-adapter.mjs';
+import { seoulScheduleParts, reservationReceiptMatches, naverReservationListCount, stage, firstLineDifference } from '../next/browser-adapter.mjs';
+
+test('automation stage brings the editor to front and tags failures with the step name', async () => {
+  const calls = [];
+  const page = { bringToFront: async () => { calls.push('front'); } };
+  assert.equal(await stage('제목 입력', page, async () => { calls.push('run'); return 1; }), 1);
+  assert.deepEqual(calls, ['front', 'run']);
+  await assert.rejects(stage('본문 입력', page, async () => { throw new Error('dropped'); }), error => error.stage === '본문 입력' && error.message === '[본문 입력] dropped');
+  // An inner stage keeps its own label instead of being renamed by an outer one.
+  await assert.rejects(stage('바깥', page, () => stage('안쪽', page, async () => { throw new Error('x'); })), error => error.stage === '안쪽' && error.message === '[안쪽] x');
+  const closed = { bringToFront: async () => { throw new Error('Target closed'); } };
+  assert.equal(await stage('확인', closed, async () => 'ok'), 'ok');
+});
+
+test('first line difference reports the line number without copying text', () => {
+  assert.equal(firstLineDifference('a\nb\nc', 'a\nX\nc'), 'first difference at line 2; editor 3 lines, approved 3 lines');
+  assert.equal(firstLineDifference('a\nb', 'a\nb\nc'), 'first difference at line 3; editor 2 lines, approved 3 lines');
+});
 
 test('platform reservation converts explicit offsets into Seoul calendar fields', () => {
   assert.deepEqual(seoulScheduleParts('2026-11-08T01:20:00Z'), { year: 2026, month: 11, day: 8, hour: '10', minute: '20' });
