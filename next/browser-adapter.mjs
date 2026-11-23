@@ -118,6 +118,7 @@ export async function fillNativeEditorPage(page, job) {
     return { editorUrl: page.url(), visibleAccount: job.accountHandle, title, body, uploadedImages, verification: 'browser-readback' };
   }
   if (job.channel === 'naver') {
+    assertNaverBodyHasNoHashtags(job.draft.body);
     const frameInfo = page.frames().find(frame => frame.name() === 'mainFrame');
     if (!frameInfo || new URL(frameInfo.url()).searchParams.get('blogId') !== job.accountHandle) throw new Error('Naver editor account mismatch');
     const frame = page.frameLocator('iframe#mainFrame');
@@ -395,8 +396,21 @@ async function naverTagItems(frame) {
   });
 }
 
+export function assertNaverBodyHasNoHashtags(body) {
+  if (/(^|[^\p{L}\p{N}_])#[\p{L}\p{N}_]+/u.test(body)) throw new Error('Naver body contains a hashtag-like # pattern; remove or rewrite it before editor input');
+}
+
+export async function verifyNaverTags(frame, tags) {
+  const registered = await naverTagItems(frame);
+  const expected = new Set(tags);
+  if (registered.length !== expected.size || registered.some(tag => !expected.has(tag))) {
+    throw new Error(`Naver tags differ from approved draft (approved: ${tags.join(', ') || 'none'}; registered: ${registered.join(', ') || 'none'})`);
+  }
+  return registered;
+}
+
 export async function enterNaverTags(frame, page, tags) {
-  if (!tags.length) return [];
+  if (!tags.length) return verifyNaverTags(frame, tags);
   const candidates = [
     frame.locator('input[placeholder*="태그"]').filter({ visible: true }),
     frame.locator('input[aria-label*="태그"]').filter({ visible: true }),
@@ -416,9 +430,7 @@ export async function enterNaverTags(frame, page, tags) {
     }
     if (!found) throw new Error(`Naver tag was not confirmed: ${tag}`);
   }
-  const registered = await naverTagItems(frame);
-  if (tags.some(tag => !registered.includes(tag))) throw new Error('Naver tag readback differs from approved draft');
-  return tags;
+  return verifyNaverTags(frame, tags);
 }
 export async function configurePlatformReservation(page, channel, at, tags = []) {
   const target = seoulScheduleParts(at);
@@ -526,6 +538,7 @@ export async function recheckNaverReservation(job) {
 export async function submitPlatformReservation(sessionId, job, beforeSubmit = async () => {}) {
   const session = sessions.get(sessionId);
   if (!session || session.jobId !== job.id || session.channel !== job.channel || session.accountHandle !== job.accountHandle) throw new Error('Editor session does not match approved account');
+  if (job.channel === 'naver') assertNaverBodyHasNoHashtags(job.draft.body);
   const editor = await readEditorSession(sessionId);
   if (editor.title.trim() !== job.draft.title.trim() || editor.body.trim() !== job.draft.body.trim()) throw new Error('Editor content differs from approved draft');
   if (!session.mapping && job.draft.images.length) {
@@ -541,6 +554,7 @@ export async function submitPlatformReservation(sessionId, job, beforeSubmit = a
     if (await buttons.count() !== 2) throw new Error('Naver final reservation button is ambiguous');
     // Read the list before submitting so an existing reservation with the same title and time cannot count as this one.
     listedBefore = naverReservationListCount(await readNaverReservationList(session.context, job.accountHandle), job.draft.title, job.schedule.at);
+    await verifyNaverTags(session.page.frameLocator('iframe#mainFrame'), job.draft.tags || []);
     await beforeSubmit();
     await buttons.last().click();
   } else {
