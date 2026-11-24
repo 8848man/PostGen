@@ -30,6 +30,7 @@ Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저�
 ## GitHub 변경 전달
 
 - 기본 브랜치(`master` 또는 `main`)에 직접 커밋하거나 푸시하지 않는다. 작업 브랜치에서 변경을 검증하고 PR을 연 뒤 사용자에게 PR 링크와 검증 결과를 보여 주고 확인·합병을 요청한다.
+- 작업을 시작할 때(새 브랜치를 따기 전) `gh pr list --state open`과 `gh pr view <번호> --json files`로 열린 PR이 이번에 고칠 파일을 건드리는지 확인한다. 겹치는 PR이 있으면 PR 번호와 겹친 파일을 사용자에게 알리고, 기존 PR 합병을 기다릴지·그 위에서 작업할지·그대로 진행할지 먼저 묻는다. `next/browser-adapter.mjs`·`next/web/app.js`·`next/server.mjs`처럼 여러 PR이 함께 고치는 핵심 파일은 특히 확인한다(GitHub 이슈 #26).
 - 관련 열린 PR이 이미 있으면 그 PR에 추가 커밋을 푸시하거나 최신화(rebase·base 반영·force push 포함)하기 전에 사용자에게 기존 PR 확인과 합병을 먼저 요청한다. 사용자가 기존 PR 갱신을 명시적으로 선택한 경우에만 갱신한다.
 - 열린 PR이 없는 새 작업 브랜치의 첫 푸시와 PR 생성은 위 절차에 따라 진행한다. PR 합병은 사용자가 수행하거나 별도로 요청했을 때만 진행한다.
 
@@ -48,5 +49,13 @@ Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저�
 - `#auto` 과제 묶음이 끝나면 frontmatter에 `mode: auto`를 넣은 세션 요약 **하나**를 제출하고, 만든 PR 링크와 검증 결과를 요약 산출물에 적는다.
 
 일반 세션(자동 모드로 열지 않은 세션)에서는 `#auto` 과제도 다른 과제와 같이 사용자에게 제안하고, 사용자가 고른 것만 진행한다.
+
+### 볼트 원문 → PostGen 작업
+
+볼트 원문(`posts/` 등)으로 PostGen 작업(create → plan → draft)을 만들 때는 검토 화면이 쓰는 데이터 폴더에 만든다. 다른 폴더에 만들면 사용자가 검토 화면에서 초안을 볼 수 없다.
+
+- 검토 화면 런처(`start-postgen-review.cmd` → `scripts/open-review.mjs`)는 `POSTGEN_DATA_DIR` 환경 변수가 있으면 그 폴더를, 없으면 기존 포스팅용 크롬 데이터 폴더(`%USERPROFILE%\Documents\ChatGPT\new_sample\postgen-data`)를 쓴다. 작업을 만드는 명령에도 같은 `POSTGEN_DATA_DIR`을 넘긴다.
+- 실행 도구 환경의 기본 PostGen 데이터 경로는 검토 화면과 다를 수 있고, 빈 계정 등록부일 수 있다(ISSUE-086). 작업을 만들기 전에 그 폴더의 `account-registry.json`에 대상 게시 계정이 있고 `next/jobs.json`에 기존 작업이 보이는지 확인한다. 둘 다 비어 있으면 작업을 만들지 말고 사용자에게 데이터 폴더를 묻는다.
+- 시험용 데이터는 별도 `POSTGEN_DATA_DIR`로 분리하며, 실제 데이터 폴더에서 시험하지 않는다.
 
 세부 규칙: `D:/obsidian_db/obsidian/mcp/USAGE_PROMPT.md`
