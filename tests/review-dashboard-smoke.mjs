@@ -56,7 +56,9 @@ try {
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].review.decision, 'rejected');
   await page.route('**/api/start', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
   await page.route('**/api/prepare-browser', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessionId: 'test', loginRequired: true, message: 'Test browser handoff' }) }));
-  await page.getByLabel('공개 시각').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
+  const publishAt = new Date(Date.now() + 86_400_000);
+  publishAt.setMinutes(Math.ceil(publishAt.getMinutes() / 10) * 10, 0, 0);
+  await page.getByLabel('공개 시각').fill(new Date(publishAt.getTime() - publishAt.getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
   await page.getByRole('button', { name: '발행', exact: true }).click();
   await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].status, 'awaiting_registration');
@@ -71,7 +73,24 @@ try {
   await page.getByRole('button', { name: '편집기 다시 열기' }).waitFor();
   await page.getByRole('button', { name: '편집기 다시 열기' }).click();
   await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
-  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation\n');
+  const progressFor = async statuses => {
+    await page.unroute('**/api/state');
+    await page.route('**/api/state', async route => { const response = await route.fetch(); const body = await response.json(); body.state.jobs.forEach((job, index) => { job.status = statuses[index]; }); await route.fulfill({ response, json: body }); });
+    await page.reload();
+    const progress = page.locator('.campaign-card .campaign-progress');
+    await progress.waitFor();
+    return { text: await progress.innerText(), className: await page.locator('.campaign-card').getAttribute('class') };
+  };
+  let card = await progressFor(['registered', 'verification_due']);
+  assert.match(card.text, /예약 발행 등록됨 · 예약 2 · 발행 0\/2/);
+  assert.match(card.className, /\bscheduled\b/);
+  card = await progressFor(['published', 'registered']);
+  assert.match(card.text, /남은 채널 예약 발행 등록됨 · 예약 1 · 발행 1\/2/);
+  assert.match(card.className, /\bscheduled\b/);
+  card = await progressFor(['registered', 'draft']);
+  assert.match(card.text, /일부 채널 예약 등록됨 · 예약 1 · 발행 0\/2/);
+  assert.match(card.className, /\bin-progress\b/);
+  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation, recovery, scheduled campaign state\n');
 } finally {
   if (browser) await browser.close();
   if (child) child.kill();
