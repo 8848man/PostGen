@@ -8,7 +8,7 @@ const scheduleInputs = new Map();
 function rememberSelection() { const params = new URLSearchParams({ token }); if (selectedJobId) params.set('job', selectedJobId); history.replaceState(null, '', `#${params}`); }
 const statusLabels = { selected: '원본 등록', draft: '초안 검토', approved: '승인됨', awaiting_registration: '예약 준비', preparing: '편집기 준비', review_required: '변경 재검토', ready_to_register: '등록 대기', submitting: '예약 등록 중', registered: '예약 등록됨', verification_due: '공개 확인 필요', published: '발행 확인됨', unknown: '등록 결과 불명확', expired: '예약 만료', cancelled: '취소됨', failed: '실패' };
 const hasDraftStandard = job => !!(job.draft?.standard?.set && /^[0-9a-f]{64}$/.test(job.draft.standard.sha256 || ''));
-const displayStatus = job => job.status === 'published' && job.publication?.source === 'manual' ? '수동 발행 완료' : job.status === 'draft' && !hasDraftStandard(job) ? '지침 적용 확인 필요' : statusLabels[job.status] || job.status;
+const displayStatus = job => job.status === 'published' && job.publication?.source === 'manual' ? '수동 발행 완료' : job.status === 'published' && job.publication?.source === 'implicit' ? '발행 완료 (예약 시각 경과)' :job.status === 'draft' && !hasDraftStandard(job) ? '지침 적용 확인 필요' : statusLabels[job.status] || job.status;
 function usageText(entries) {
   const unique = [...new Map(entries.map(entry => [entry.id, entry])).values()];
   if (!unique.length) return '호스트 호출 기록 없음';
@@ -38,7 +38,7 @@ function button(label, action, blockedReason = null) {
     if (reason) return say(reason);
     running = true;
     try { await action(); await refresh(); }
-    catch (error) { say(error.message); }
+    catch (error) { say(error.message, 60_000); }
     finally { running = false; }
   };
   return element;
@@ -151,6 +151,8 @@ async function refresh() {
     const outcomeTitle = document.createElement('strong'); outcomeTitle.textContent = '예상 결과와 현재 상태'; outcome.append(outcomeTitle);
     const outcomeText = document.createElement('p'); outcomeText.textContent = job.status === 'published' && job.publication?.source === 'manual' ? `${channelLabels[account?.channel] || account?.channel || '채널'} / ${job.accountHandle}에 “${job.draft?.title || '제목 미정'}” 글을 사용자가 직접 올린 것으로 표시했습니다. 플랫폼 자동 확인은 하지 않았습니다.` : `${channelLabels[account?.channel] || account?.channel || '채널'} / ${job.accountHandle}에 “${job.draft?.title || '제목 미정'}” 글을 ${job.schedule?.at ? new Date(job.schedule.at).toLocaleString('ko-KR') : '승인 후 지정할 시각'}에 예약합니다. 현재: ${displayStatus(job)}.`; outcome.append(outcomeText);
     if (job.status === 'draft' && !hasDraftStandard(job)) { const notice = document.createElement('p'); notice.textContent = '지침 적용 기록이 없습니다. 발행 시 별도 확인을 요청합니다.'; outcome.append(notice); }
+    if (job.status === 'published' && job.publication?.source === 'implicit') { const implicit = document.createElement('p'); implicit.textContent = `예약 시각(${new Date(job.schedule.at).toLocaleString('ko-KR')})이 지나 발행 완료로 처리했습니다. 실제로 올라가지 않았다면 “발행 안 됨으로 되돌리기”를 누르세요.`; outcome.append(implicit); }
+    if (job.automationError && !['published','registered'].includes(job.status)) { const failure = document.createElement('p'); failure.className = 'automation-error'; failure.textContent = `마지막 자동 입력 중단 (${new Date(job.automationError.at).toLocaleString('ko-KR')}${job.automationError.stage ? ` · 단계: ${job.automationError.stage}` : ''}): ${job.automationError.message}`; outcome.append(failure); }
     if (job.registration) { const registration = document.createElement('p'); registration.textContent = `플랫폼 예약: ${job.registration.verified ? '확인됨' : '확인 불가'} · ${job.registration.remoteId || job.registration.reservationUrl || '영수증 없음'}`; outcome.append(registration); }
     if (job.publication?.postUrl) { const link = document.createElement('a'); link.href = job.publication.postUrl; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `공개 글 확인: ${job.publication.postUrl}`; outcome.append(link); }
     if (job.review) { const note = document.createElement('p'); note.className = 'review-note'; note.textContent = `${job.review.decision === 'rejected' ? '반려' : '개선 요청'}: ${job.review.note}`; outcome.append(note); }
@@ -171,7 +173,8 @@ async function refresh() {
         const { lock } = await api('/api/draft/lock', { jobId: job.id });
         try { await api('/api/draft', { jobId: job.id, draft: { ...job.draft, tags }, lockToken: lock.token, expectedDraftRevision: lock.draftRevision }); }
         finally { await api('/api/draft/unlock', { jobId: job.id, token: lock.token }); }
-        say('태그를 저장했습니다. 발행 창에서 개별 태그 등록을 확인합니다.');
+        await refresh();
+        say('태그를 저장했습니다. 네이버 글은 본문 첫 줄에 태그가 표시됩니다.');
       })); article.append(tagRow);
     }
     const canRepublish = job.draft && job.approval && republishable.includes(job.status);
@@ -186,11 +189,14 @@ async function refresh() {
         row.append(time, button('재발행', async () => {
           const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
           const platformChecked = Boolean(job.submission?.startedAt || job.registration);
-          if (platformChecked && !confirm('이 글은 이미 플랫폼에 등록됐을 수 있습니다. 플랫폼의 예약 목록과 발행 글에 이 글이 없는 것을 확인했습니까? 확인하지 않고 재발행하면 중복 게시될 수 있습니다.')) return;
-          if (!platformChecked && !confirm(`승인된 글을 ${parsed.toLocaleString()}에 다시 예약 등록합니다. 진행할까요?`)) return;
+          if (platformChecked && !confirm('이 글은 이미 플랫폼에 등록됐을 수 있습니다. 플랫폼의 예약 목록과 발행 글에 이 글이 없는 것을 확인했습니까? 확인하지 않고 재발행하면 중복 게시될 수 있습니다.')) return say('재발행을 취소했습니다.');
+          if (!platformChecked && !confirm(`승인된 글을 ${parsed.toLocaleString()}에 다시 예약 등록합니다. 진행할까요?`)) return say('재발행을 취소했습니다.');
           await api('/api/publication/republish', { jobId: job.id, at: parsed.toISOString(), platformChecked });
           scheduleInputs.delete(`republish:${job.id}`);
+          say('재발행 예약을 저장했습니다. 편집기를 준비합니다.', 60_000);
+          await refresh();
           await api('/api/start', { jobId: job.id });
+          await refresh();
           await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
         }));
         recovery.append(row);
@@ -261,11 +267,13 @@ async function refresh() {
       const title = document.createElement('h4'); title.textContent = '발행'; panel.append(title);
       const note = document.createElement('p'); note.textContent = `${account?.handle || job.accountHandle} · 이미지 ${job.draft.images.length}장 · 발행을 누르면 표시된 글과 이미지를 함께 승인하고 지정 시각 예약 등록을 시작합니다.`; panel.append(note);
       const row = document.createElement('div'); row.className = 'publish-row';
-      const time = document.createElement('input'); time.type = 'datetime-local'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id) || localDateTime(new Date(Date.now() + 24 * 60 * 60 * 1000)); time.oninput = () => scheduleInputs.set(job.id, time.value);
+      const defaultTime = new Date(Date.now() + 24 * 60 * 60 * 1000); defaultTime.setSeconds(0, 0); defaultTime.setMinutes(Math.ceil(defaultTime.getMinutes() / 10) * 10);
+      const time = document.createElement('input'); time.type = 'datetime-local'; time.step = '600'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id) || localDateTime(defaultTime); time.oninput = () => scheduleInputs.set(job.id, time.value);
       let conflict = null;
       const missing = job.draft.images.filter(image => !image.generatedPath && !image.pendingPath).length;
       const publish = button('발행', async () => {
         const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
+        if (parsed.getTime() % (10 * 60_000) !== 0) throw new Error('공개 시각은 10분 단위로 지정하세요.');
         const at = parsed.toISOString();
         const standardUnverifiedAcknowledged = job.status === 'draft' && !hasDraftStandard(job) ? await confirmUnverifiedStandard() : false;
         if (job.status === 'draft' && !hasDraftStandard(job) && !standardUnverifiedAcknowledged) return;
@@ -305,12 +313,17 @@ async function refresh() {
     if (['awaiting_registration','due'].includes(job.status)) actions.append(button('플랫폼 예약 등록 재개', async () => { await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
     if (job.status === 'preparing' && !(account?.channel === 'naver' && job.draft.tags?.length)) actions.append(button('MCP 초안 입력', async () => { const available = cache.connectors.servers.filter(item => item.approvedFingerprint); const connectorId = prompt(`허용된 서버 ID를 선택하세요:\n${available.map(item => `${item.id}: ${item.name}`).join('\n')}`); const toolName = connectorId && prompt('초안 입력 도구 이름'); if (connectorId && toolName) { const result = await api('/api/prepare-mcp', { jobId: job.id, connectorId, toolName }); say(JSON.stringify(result.result).slice(0,300)); } }));
     if (job.status === 'preparing') actions.append(button('로그인 후 재개', async () => { const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (!sessionId) return say('편집기 세션이 없어 다시 열어야 합니다.'); await preparedBrowser(job.id, await api('/api/prepare-browser/resume', { jobId: job.id, sessionId })); }));
+    if (job.status === 'preparing') actions.append(button('편집기 다시 열기', async () => {
+      sessionStorage.removeItem(`editor:${job.id}`);
+      await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
+    }));
     if (job.status === 'preparing') actions.append(button('수동 편집기 검수 기록', async () => { const editorUrl = prompt('실제 편집기 URL'), visibleAccount = prompt('화면에 보이는 계정명', job.accountHandle), title = prompt('실제 편집기 제목'), body = prompt('실제 편집기 본문'); const uploadedImages = job.draft.images.length ? prompt('화면에서 업로드와 위치를 확인한 이미지 ID를 쉼표로 구분해 입력', '')?.split(',').map(s => s.trim()) || [] : []; if (editorUrl && visibleAccount && title && body) await api('/api/review', { jobId: job.id, editor: { editorUrl, visibleAccount, title, body, uploadedImages } }); }));
     if (job.status === 'expired') actions.append(button('재검토 후 재예약', async () => { const at = prompt('새 예약 시각 (ISO 8601)'); if (at && confirm('사실·링크를 다시 확인하고 이 계정의 글을 재승인합니까?')) await api('/api/reschedule', { jobId: job.id, at, factsAndLinksReviewed: true }); }));
     if (job.status === 'review_required') actions.append(button('편집기 변경 재검토·승인', async () => { if (!confirm('편집기에서 달라진 제목·본문의 사실 주장과 링크를 다시 확인하고, 이 계정의 수정본을 승인합니까?')) return; await api('/api/review-changes', { jobId: job.id, factsAndLinksReviewed: true }); const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (sessionId) await registerBrowser(job.id, sessionId); }));
     if (job.status === 'ready_to_register') actions.append(button('승인된 예약 등록 실행', async () => { const sessionId = sessionStorage.getItem(`editor:${job.id}`); if (!sessionId) return say('편집기 세션이 없습니다. 서버를 재시작했다면 예약 등록을 수동으로 확인해야 합니다.'); await registerBrowser(job.id, sessionId); }));
     if (job.status === 'ready_to_register' && !(account?.channel === 'naver' && job.draft.tags?.length) && cache.connectors.servers.some(item => item.approvedFingerprint)) actions.append(button('승인된 MCP 예약 도구로 등록', async () => { const available = cache.connectors.servers.filter(item => item.approvedFingerprint); const connectorId = prompt(`예약 도구가 있는 서버 ID:\n${available.map(item => `${item.id}: ${item.name}`).join('\n')}`); const toolName = connectorId && prompt('예약 등록 도구 이름 (schedule/reserve)'); if (!connectorId || !toolName) return; const output = await api('/api/registration/mcp', { jobId: job.id, connectorId, toolName }); say(output.result.verified ? 'MCP 예약 등록 확인' : `예약 결과 불명확: ${output.result.reason}`); }));
-    if (job.status === 'verification_due') actions.append(button('공개 URL 확인·기록', async () => { const postUrl = prompt('플랫폼에서 공개된 글의 URL'); if (!postUrl) return; const finalTitle = prompt('공개된 제목', job.editor?.title || job.draft.title), finalBody = prompt('공개된 본문', job.editor?.body || job.draft.body); if (finalTitle && finalBody) await api('/api/publication', { jobId: job.id, publication: { postUrl, finalTitle, finalBody, source: 'user', finalTextSource: 'user', changedClaimsReviewed: finalBody === job.editor?.body || confirm('변경된 사실 주장을 검토했습니까?') } }); }));
+    if (job.status === 'published' && job.publication?.source === 'implicit') actions.append(button('발행 안 됨으로 되돌리기', async () => { if (!confirm('플랫폼에서 이 글이 실제로 발행되지 않았습니까? 공개 확인 필요 상태로 되돌립니다.')) return; await api('/api/publication/implicit/undo', { jobId: job.id }); }));
+    if (job.status === 'verification_due' || job.status === 'published' && job.publication?.source === 'implicit') actions.append(button('공개 URL 확인·기록', async () => { const postUrl = prompt('플랫폼에서 공개된 글의 URL'); if (!postUrl) return; const finalTitle = prompt('공개된 제목', job.editor?.title || job.draft.title), finalBody = prompt('공개된 본문', job.editor?.body || job.draft.body); if (finalTitle && finalBody) await api('/api/publication', { jobId: job.id, publication: { postUrl, finalTitle, finalBody, source: 'user', finalTextSource: 'user', changedClaimsReviewed: finalBody === job.editor?.body || confirm('변경된 사실 주장을 검토했습니까?') } }); }));
     if (job.status === 'unknown' && account?.channel === 'naver') actions.append(button('네이버 예약 목록에서 다시 확인', async () => { const output = await api('/api/registration/recheck', { jobId: job.id }); say(output.result.verified ? '예약 목록에서 확인해 등록됨으로 기록했습니다.' : `등록으로 확인하지 못했습니다: ${output.result.reason}`); }));
     if (['submitting','unknown'].includes(job.status)) article.append(document.createTextNode(' 예약 등록 결과가 불명확합니다. 플랫폼의 예약 목록에서 중복 등록 여부를 먼저 확인하세요. 자동 재시도하지 않습니다.'));
     jobs.append(article);

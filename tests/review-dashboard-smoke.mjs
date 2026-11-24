@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { addAccount, emptyRegistry, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
-import { createCampaign, emptyState, saveState, setDraft } from '../next/core.mjs';
+import { createCampaign, emptyState, loadState, saveState, setDraft, startPreparation } from '../next/core.mjs';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'postgen-review-'));
 process.env.POSTGEN_DATA_DIR = dir;
@@ -56,10 +56,23 @@ try {
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].review.decision, 'rejected');
   await page.route('**/api/start', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
   await page.route('**/api/prepare-browser', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessionId: 'test', loginRequired: true, message: 'Test browser handoff' }) }));
-  await page.getByLabel('공개 시각').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
+  const publishAt = new Date(Date.now() + 86_400_000);
+  publishAt.setMinutes(Math.ceil(publishAt.getMinutes() / 10) * 10, 0, 0);
+  await page.getByLabel('공개 시각').fill(new Date(publishAt.getTime() - publishAt.getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
   await page.getByRole('button', { name: '발행', exact: true }).click();
   await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs[1].status, 'awaiting_registration');
+  await page.getByRole('button', { name: '재발행', exact: true }).click();
+  await page.getByText('재발행 1회', { exact: false }).waitFor();
+  assert.equal(loadState().jobs[1].republishHistory.length, 1);
+  const beforeRecovery = loadState();
+  saveState(startPreparation(beforeRecovery, beforeRecovery.jobs[1].id), beforeRecovery.revision);
+  await page.reload();
+  await page.locator('.channel-card').filter({ hasText: '티스토리' }).click();
+  await page.getByText('글·이미지 편집 옵션').click();
+  await page.getByRole('button', { name: '편집기 다시 열기' }).waitFor();
+  await page.getByRole('button', { name: '편집기 다시 열기' }).click();
+  await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
   const progressFor = async statuses => {
     await page.unroute('**/api/state');
     await page.route('**/api/state', async route => { const response = await route.fetch(); const body = await response.json(); body.state.jobs.forEach((job, index) => { job.status = statuses[index]; }); await route.fulfill({ response, json: body }); });
@@ -77,7 +90,7 @@ try {
   card = await progressFor(['registered', 'draft']);
   assert.match(card.text, /일부 채널 예약 등록됨 · 예약 1 · 발행 0\/2/);
   assert.match(card.className, /\bin-progress\b/);
-  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation, scheduled campaign state\n');
+  process.stdout.write('Review dashboard smoke passed: source, channel selection, body, rejection, one-click reservation, recovery, scheduled campaign state\n');
 } finally {
   if (browser) await browser.close();
   if (child) child.kill();

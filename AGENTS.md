@@ -22,6 +22,11 @@
 
 Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저장한 스크립트 파일을 쓴다. 셸 명령 안의 인라인 Python·sed·heredoc 스크립트는 쓰지 않는다. 인라인 이스케이프가 깨지고 CRLF 줄바꿈이 바뀌어 diff가 커지기 때문이다.
 
+## 시험 실행
+
+- 기본 단위 시험은 `npm test`, 브라우저·검토 화면 스모크 시험은 `npm run test:smoke`로 실행한다. 개별 확인은 `npm run test:browser`, `npm run test:review`를 사용한다. 검토 화면 스모크 시험은 자체적으로 시험용 `POSTGEN_DATA_DIR`을 설정한다.
+- Assets Manager 실연동 시험은 `npm run test:assets-live`로 실행한다. 스크립트는 인접한 `../assets_manager/app/core/cli.py`를 기본으로 사용하며, 다른 위치에 설치했다면 `POSTGEN_ASSETS_CLI` 환경 변수로 경로를 지정한다.
+
 ## GitHub 변경 전달
 
 - 기본 브랜치(`master` 또는 `main`)에 직접 커밋하거나 푸시하지 않는다. 작업 브랜치에서 변경을 검증하고 PR을 연 뒤 사용자에게 PR 링크와 검증 결과를 보여 주고 확인·합병을 요청한다.

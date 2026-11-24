@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { dataDir } from './profile.mjs';
-import { cleanTags, projectNameForSources, projectTitle } from './post-metadata.mjs';
+import { cleanTags, projectNameForSources, projectTitle, withNaverTagLine } from './post-metadata.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
@@ -27,7 +27,8 @@ export function validateState(state) {
     if (job.review && (!['rejected','improvement_requested'].includes(job.review.decision) || !nonempty(job.review.note, 2000) || !iso(job.review.at))) throw new Error('Invalid draft review');
     if (job.imageProvider !== undefined && !['manual', 'codex'].includes(job.imageProvider)) throw new Error('Invalid image host');
     if ((['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) || job.status === 'published' && job.publication?.source !== 'manual') && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
-    if (job.status === 'published' && (!job.draft || !iso(job.publication?.at) || (job.publication?.source !== 'manual' && !nonempty(job.publication?.postUrl, 2048)))) throw new Error('Published job needs a draft and publication record');
+    if (job.status === 'published' && (!job.draft || !iso(job.publication?.at) || (!['manual', 'implicit'].includes(job.publication?.source) && !nonempty(job.publication?.postUrl, 2048)))) throw new Error('Published job needs a draft and publication record');
+    if (job.status === 'published' && job.publication?.source === 'implicit' && !job.registration?.verified) throw new Error('Implicit publication needs a verified platform reservation');
     if (['scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) && (!iso(job.schedule?.at) || !iso(job.schedule?.expiresAt))) throw new Error('Scheduled job needs a time');
     if ((['registered','verification_due'].includes(job.status) || job.status === 'published' && job.registration) && job.schedule && (!job.registration?.verified || job.registration.publishAt !== job.schedule.at || job.registration.accountHandle !== job.accountHandle)) throw new Error('Platform reservation must be verified');
     ids.add(job.id);
@@ -183,10 +184,13 @@ export function setDraftEvaluation(state, id, evaluation) {
   });
 }
 
-export function setDraft(state, id, draft, diagnostics = []) {
+export function setDraft(state, id, draft, diagnostics = [], { channel = null } = {}) {
   return change(state, id, ['selected','draft'], job => {
     if (!nonempty(draft?.title, 300)) throw new Error('Draft title is required');
-    job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags: cleanTags(draft.tags || []), body: draft.body, claims: draft.claims || [], images: draft.images || [], headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
+    const tags = cleanTags(draft.tags || []);
+    const tagged = channel === 'naver' ? withNaverTagLine(draft.body, tags, job.draft?.tags || []) : { body: draft.body, paragraphShift: 0 };
+    const images = (draft.images || []).map(image => ({ ...image, afterParagraph: image.afterParagraph + tagged.paragraphShift }));
+    job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags, body: tagged.body, claims: draft.claims || [], images, headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
     job.review = null;
@@ -340,6 +344,7 @@ export function scheduleJob(state, id, at, now = new Date()) {
   return change(state, id, ['approved'], job => {
     if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate before scheduling');
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
+    if (Date.parse(at) % (10 * 60_000) !== 0) throw new Error('Schedule must use ten-minute increments');
     job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
     job.registration = null;
     job.status = 'awaiting_registration';
@@ -350,6 +355,7 @@ export function scheduleJob(state, id, at, now = new Date()) {
 export function publishDraftReservation(state, id, at, { conflictAcknowledged = false, standardUnverifiedAcknowledged = false } = {}, now = new Date()) {
   return change(state, id, ['draft'], job => {
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
+    if (Date.parse(at) % (10 * 60_000) !== 0) throw new Error('Schedule must use ten-minute increments');
     if (!job.draft) throw new Error('Missing draft');
     const standardUnverified = !hasDraftStandard(job.draft);
     if (standardUnverified && !standardUnverifiedAcknowledged) throw new Error('Unverified draft standard requires explicit publication confirmation');
@@ -390,10 +396,16 @@ export function refreshDue(state, now = new Date()) {
   const next = structuredClone(validateState(state));
   let changed = false;
   for (const job of next.jobs) {
-    if (!['scheduled','due','awaiting_registration','registered'].includes(job.status)) continue;
+    if (!['scheduled','due','awaiting_registration','registered','verification_due'].includes(job.status)) continue;
     let updated = false;
     if (['scheduled','due'].includes(job.status)) { job.status = 'expired'; updated = true; }
-    else if (job.status === 'registered' && now.getTime() >= Date.parse(job.schedule.at)) { job.status = 'verification_due'; updated = true; }
+    else if (['registered','verification_due'].includes(job.status) && now.getTime() >= Date.parse(job.schedule.at)) {
+      // A verified platform reservation whose time has passed counts as published unless the user said it was not.
+      const previous = job.status;
+      if (job.registration?.verified && !job.implicitPublicationDeclined) applyImplicitPublication(job, now);
+      else job.status = 'verification_due';
+      updated = job.status !== previous;
+    }
     else if (job.status === 'awaiting_registration' && now.getTime() >= Date.parse(job.schedule.expiresAt)) { job.status = 'expired'; updated = true; }
     if (updated) { job.updatedAt = now.toISOString(); changed = true; }
   }
@@ -409,6 +421,7 @@ export function reviewPreparation(state, id, { editorUrl, visibleAccount, title,
     const expected = job.draft.images.map(image => image.id);
     if (expected.some(imageId => !uploadedImages.includes(imageId))) throw new Error('Image upload or position unverified');
     job.editor = { editorUrl, visibleAccount, title, body, uploadedImages, checkedAt: new Date().toISOString() };
+    delete job.automationError;
     job.status = title.trim() === job.draft.title.trim() && body.trim() === job.draft.body.trim() ? 'ready_to_register' : 'review_required';
   });
 }
@@ -436,6 +449,8 @@ export function markScheduleUnknown(state, id, reason) {
 function applyVerifiedRegistration(job, { accountHandle, publishAt, evidence, remoteId = null, reservationUrl = null, verified = false }, extra = {}) {
   if (!verified || accountHandle !== job.accountHandle || !iso(publishAt) || new Date(publishAt).toISOString() !== job.schedule?.at || !nonempty(evidence, 1000) || (!nonempty(remoteId, 200) && !nonempty(reservationUrl, 2048))) throw new Error('Platform reservation account, time, and receipt must be verified');
   job.registration = { accountHandle, publishAt: job.schedule.at, evidence, remoteId, reservationUrl, verified: true, registeredAt: new Date().toISOString(), ...extra };
+  delete job.implicitPublicationDeclined;
+  delete job.automationError;
   job.submission = { ...job.submission, outcome: 'registered' };
   job.status = 'registered';
 }
@@ -446,8 +461,33 @@ export function confirmPlatformSchedule(state, id, receipt) {
 export function confirmUnknownSchedule(state, id, receipt) {
   return change(state, id, ['unknown'], job => applyVerifiedRegistration(job, receipt, { recheckedAfterUnknown: true }));
 }
+function applyImplicitPublication(job, now) {
+  job.publication = { postUrl: null, finalTitle: job.editor?.title || job.draft.title, finalBody: job.editor?.body || job.draft.body, source: 'implicit', finalTextSource: 'approved', at: now.toISOString(), previousStatus: job.status };
+  job.status = 'published';
+}
+// Undo an implicit publication when the post did not actually go out; it stays in verification_due until the user acts.
+export function declineImplicitPublication(state, id) {
+  return change(state, id, ['published'], job => {
+    if (job.publication?.source !== 'implicit') throw new Error('Only an implicit publication can be marked as not published');
+    job.publication = null;
+    job.implicitPublicationDeclined = true;
+    job.status = 'verification_due';
+  });
+}
+// Record a failed browser automation step so the reason survives after the on-screen message disappears.
+export function recordAutomationError(state, id, { step, stage = null, message }, now = new Date()) {
+  validateState(state);
+  const next = structuredClone(state);
+  const job = next.jobs.find(item => item.id === id);
+  if (!job) throw new Error('Unknown job');
+  job.automationError = { step: String(step).slice(0, 80), stage: stage ? String(stage).slice(0, 80) : null, message: String(message || 'Unknown error').slice(0, 500), status: job.status, at: now.toISOString() };
+  job.updatedAt = now.toISOString();
+  next.revision++;
+  return validateState(next);
+}
 export function recordPublication(state, id, { postUrl, finalTitle, finalBody, source = 'user', finalTextSource = 'user', changedClaimsReviewed = false }, now = new Date()) {
-  return change(state, id, ['verification_due','registered','unknown','cancelled'], job => {
+  return change(state, id, ['verification_due','registered','unknown','cancelled','published'], job => {
+    if (job.status === 'published' && job.publication?.source !== 'implicit') throw new Error('Cannot change published job');
     if (!job.draft) throw new Error('A draft is required to record publication');
     if (job.status !== 'cancelled' && job.schedule && now.getTime() < Date.parse(job.schedule.at)) throw new Error('Scheduled publication time has not passed');
     if (!nonempty(postUrl, 2048) || !/^https:\/\//i.test(postUrl)) throw new Error('Verified post URL required');
@@ -504,6 +544,7 @@ export function republishJob(state, id, at, { platformChecked = false } = {}, no
     job.editor = null;
     job.submission = null;
     job.registration = null;
+    delete job.implicitPublicationDeclined;
     job.status = 'awaiting_registration';
   });
 }

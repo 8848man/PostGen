@@ -60,6 +60,18 @@ function unique(page, selector, label) {
   return page.locator(selector);
 }
 async function one(locator, label) { if (await locator.count() !== 1) throw new Error(`${label} field is not unique`); return locator; }
+// Chrome stops rendering hidden tabs, so editor clicks stall when the user switches to the review tab mid-input.
+export async function focusEditor(page) { await page.bringToFront().catch(() => {}); }
+// Run one automation step with the editor tab in front and tag any failure with the step name.
+export async function stage(label, page, action) {
+  await focusEditor(page);
+  try { return await action(); }
+  catch (error) {
+    const tagged = error instanceof Error ? error : new Error(String(error));
+    if (!tagged.stage) { tagged.stage = label; tagged.message = `[${label}] ${tagged.message}`; }
+    throw tagged;
+  }
+}
 
 export async function fillEditorPage(page, mapping, job) {
   if (!job?.draft || !mapping) throw new Error('Draft and editor mapping required');
@@ -101,63 +113,87 @@ export async function fillEditorPage(page, mapping, job) {
 
 export async function fillNativeEditorPage(page, job) {
   if (job.channel === 'tistory') {
-    if (new URL(page.url()).hostname !== `${job.accountHandle}.tistory.com` || !page.url().includes('/manage/newpost')) throw new Error('Tistory editor account mismatch');
-    const existingTitle = (await page.locator('#post-title-inp').inputValue()).trim();
-    const existingBody = (await page.frameLocator('#editor-tistory_ifr').locator('#tinymce').innerText()).trim();
-    if (existingTitle || existingBody) throw new Error('Tistory editor contains an existing draft; open a blank editor before automatic input');
-    await page.locator('#post-title-inp').fill(job.draft.title);
-    const bodyArea = page.frameLocator('#editor-tistory_ifr').locator('#tinymce');
-    const lines = job.draft.body.replace(/\r\n/g, '\n').split('\n');
-    await bodyArea.fill(lines[0]);
-    for (const line of lines.slice(1)) { await page.keyboard.press('Enter'); if (line) await page.keyboard.insertText(line); }
-    const title = await page.locator('#post-title-inp').inputValue();
-    const body = await readTistoryBody(page);
-    if (title.trim() !== job.draft.title.trim() || body.trim() !== job.draft.body.trim()) throw new Error('Tistory editor readback differs');
-    const uploadedImages = await uploadTistoryImages(page, job.draft.images);
-    if (await readTistoryBody(page) !== body) throw new Error('Tistory body changed during image upload');
+    await stage('편집기 확인', page, async () => {
+      if (new URL(page.url()).hostname !== `${job.accountHandle}.tistory.com` || !page.url().includes('/manage/newpost')) throw new Error('Tistory editor account mismatch');
+      const existingTitle = (await page.locator('#post-title-inp').inputValue()).trim();
+      const existingBody = (await page.frameLocator('#editor-tistory_ifr').locator('#tinymce').innerText()).trim();
+      if (existingTitle || existingBody) throw new Error('Tistory editor contains an existing draft; open a blank editor before automatic input');
+    });
+    const { title, body } = await stage('제목·본문 입력', page, async () => {
+      await page.locator('#post-title-inp').fill(job.draft.title);
+      const bodyArea = page.frameLocator('#editor-tistory_ifr').locator('#tinymce');
+      const lines = job.draft.body.replace(/\r\n/g, '\n').split('\n');
+      await bodyArea.fill(lines[0]);
+      for (const line of lines.slice(1)) { await page.keyboard.press('Enter'); if (line) await page.keyboard.insertText(line); }
+      const title = await page.locator('#post-title-inp').inputValue();
+      const body = await readTistoryBody(page);
+      if (title.trim() !== job.draft.title.trim() || body.trim() !== job.draft.body.trim()) throw new Error('Tistory editor readback differs');
+      return { title, body };
+    });
+    const uploadedImages = await stage('이미지 업로드', page, async () => {
+      const uploaded = await uploadTistoryImages(page, job.draft.images);
+      if (await readTistoryBody(page) !== body) throw new Error('Tistory body changed during image upload');
+      return uploaded;
+    });
     return { editorUrl: page.url(), visibleAccount: job.accountHandle, title, body, uploadedImages, verification: 'browser-readback' };
   }
   if (job.channel === 'naver') {
+    assertNaverBodyHasNoHashtags(job.draft.body, job.draft.tags || []);
     const frameInfo = page.frames().find(frame => frame.name() === 'mainFrame');
-    if (!frameInfo || new URL(frameInfo.url()).searchParams.get('blogId') !== job.accountHandle) throw new Error('Naver editor account mismatch');
     const frame = page.frameLocator('iframe#mainFrame');
     const titleArea = frame.locator('.se-title-text .se-text-paragraph');
-    await titleArea.waitFor({ state: 'visible', timeout: 30_000 });
-    // Naver offers to resume an autosaved draft; decline so input always starts from a blank editor.
-    const resumePrompt = frame.locator('.se-popup-alert-confirm').filter({ hasText: '작성 중인 글이 있습니다' });
-    if (await resumePrompt.isVisible().catch(() => false)) {
-      await resumePrompt.locator('.se-popup-button-cancel').click();
-      await resumePrompt.waitFor({ state: 'hidden', timeout: 5000 });
-    }
-    if (await titleArea.count() !== 1) throw new Error('Naver title field unavailable');
-    const existingTitle = await readNaverTitle(page);
-    const existingBody = await readNaverBody(page);
-    const existingImages = await frame.locator('.se-image img.se-image-resource').count();
-    if (existingTitle || existingBody || existingImages) throw new Error('Naver editor contains an existing draft; open a blank editor before automatic input');
-    await titleArea.click();
-    await page.keyboard.insertText(job.draft.title);
-    const bodyArea = frame.locator('.se-component[data-a11y-title="본문"] .se-text-paragraph').first();
-    await bodyArea.click();
-    const bodyParagraphs = frame.locator('.se-component[data-a11y-title="본문"] .se-text-paragraph');
-    for (const [index, line] of job.draft.body.split('\n').entries()) {
-      if (index) {
-        await page.keyboard.press('Enter');
-        // The editor occasionally drops an Enter while typing long bodies; re-press until the paragraph exists.
-        for (let attempt = 0; attempt < 3 && await bodyParagraphs.count() < index + 1; attempt++) {
-          await page.waitForTimeout(200);
-          if (await bodyParagraphs.count() < index + 1) await page.keyboard.press('Enter');
-        }
+    await stage('편집기 확인', page, async () => {
+      if (!frameInfo || new URL(frameInfo.url()).searchParams.get('blogId') !== job.accountHandle) throw new Error('Naver editor account mismatch');
+      await titleArea.waitFor({ state: 'visible', timeout: 30_000 });
+      // Naver offers to resume an autosaved draft; decline so input always starts from a blank editor.
+      const resumePrompt = frame.locator('.se-popup-alert-confirm').filter({ hasText: '작성 중인 글이 있습니다' });
+      if (await resumePrompt.isVisible().catch(() => false)) {
+        await resumePrompt.locator('.se-popup-button-cancel').click();
+        await resumePrompt.waitFor({ state: 'hidden', timeout: 5000 });
       }
-      if (line) await page.keyboard.insertText(line);
-    }
-    if (job.draft.headings?.length) await formatNaverHeadings(page, job.draft.headings);
-    const title = await readNaverTitle(page);
-    const body = await readNaverBody(page);
-    if (title !== job.draft.title.trim() || body !== job.draft.body.trim()) throw new Error('Naver editor readback differs');
-    const uploadedImages = await uploadNaverImages(page, job.draft.images);
-    const afterUpload = await readNaverBody(page);
-    if (naverTextLines(afterUpload) !== naverTextLines(body)) throw new Error('Naver text changed during image upload');
-    if (job.draft.headings?.length) await verifyNaverHeadings(page, job.draft.headings);
+      if (await titleArea.count() !== 1) throw new Error('Naver title field unavailable');
+      const existingTitle = await readNaverTitle(page);
+      const existingBody = await readNaverBody(page);
+      const existingImages = await frame.locator('.se-image img.se-image-resource').count();
+      if (existingTitle || existingBody || existingImages) throw new Error('Naver editor contains an existing draft; open a blank editor before automatic input');
+    });
+    await stage('제목 입력', page, async () => {
+      await titleArea.click();
+      await page.keyboard.insertText(job.draft.title);
+    });
+    const lines = job.draft.body.split('\n');
+    await stage('본문 입력', page, async () => {
+      const bodyArea = frame.locator('.se-component[data-a11y-title="본문"] .se-text-paragraph').first();
+      await bodyArea.click();
+      const bodyParagraphs = frame.locator('.se-component[data-a11y-title="본문"] .se-text-paragraph');
+      for (const [index, line] of lines.entries()) {
+        if (index) {
+          await page.keyboard.press('Enter');
+          // The editor occasionally drops an Enter while typing long bodies; re-press until the paragraph exists.
+          for (let attempt = 0; attempt < 3 && await bodyParagraphs.count() < index + 1; attempt++) {
+            await page.waitForTimeout(200);
+            if (await bodyParagraphs.count() < index + 1) await page.keyboard.press('Enter');
+          }
+          if (await bodyParagraphs.count() < index + 1) throw new Error(`Naver editor dropped a line break before line ${index + 1}/${lines.length}`);
+        }
+        if (line) await page.keyboard.insertText(line);
+      }
+    });
+    if (job.draft.headings?.length) await stage('소제목 서식', page, () => formatNaverHeadings(page, job.draft.headings));
+    const { title, body } = await stage('입력 내용 확인', page, async () => {
+      const title = await readNaverTitle(page);
+      const body = await readNaverBody(page);
+      if (title !== job.draft.title.trim()) throw new Error('Naver editor title differs from approved draft');
+      if (body !== job.draft.body.trim()) throw new Error(`Naver editor body differs from approved draft (${firstLineDifference(body, job.draft.body.trim())})`);
+      return { title, body };
+    });
+    const uploadedImages = await stage('이미지 업로드', page, async () => {
+      const uploaded = await uploadNaverImages(page, job.draft.images);
+      const afterUpload = await readNaverBody(page);
+      if (naverTextLines(afterUpload) !== naverTextLines(body)) throw new Error('Naver text changed during image upload');
+      return uploaded;
+    });
+    if (job.draft.headings?.length) await stage('소제목 최종 확인', page, () => verifyNaverHeadings(page, job.draft.headings));
     return { editorUrl: frameInfo.url(), visibleAccount: job.accountHandle, title, body, uploadedImages, verification: 'browser-readback' };
   }
   throw new Error('Native channel editor adapter unavailable');
@@ -173,6 +209,12 @@ async function naverParagraphTexts(page, selector) {
 
 async function readNaverTitle(page) { return (await naverParagraphTexts(page, '.se-title-text .se-text-paragraph')).join('').trim(); }
 async function readNaverBody(page) { return (await naverParagraphTexts(page, '.se-component[data-a11y-title="본문"] .se-text-paragraph')).map(text => text.trim()).join('\n').trim(); }
+export function firstLineDifference(actual, expected) {
+  const a = actual.split('\n'), e = expected.split('\n');
+  const index = e.findIndex((line, i) => a[i]?.trim() !== line.trim());
+  const line = index < 0 ? e.length + 1 : index + 1;
+  return `first difference at line ${line}; editor ${a.length} lines, approved ${e.length} lines`;
+}
 function naverTextLines(text) { return text.replace(/\r\n/g, '\n').split('\n').map(line => line.trim()).filter(Boolean).join('\n'); }
 async function selectNaverParagraph(paragraph, endOnly = false) {
   await paragraph.click();
@@ -221,6 +263,7 @@ async function verifyNaverHeadings(page, headings) {
 async function formatNaverHeadings(page, headings) {
   const frame = page.frameLocator('iframe#mainFrame');
   for (const heading of headings) {
+    await focusEditor(page);
     const paragraph = await exactNaverBodyParagraph(page, heading);
     // SmartEditor ignores DOM ranges set by script; select with the keyboard so the editor registers it.
     await paragraph.click();
@@ -240,6 +283,7 @@ export async function uploadNaverImages(page, images) {
   const uploaded = [];
   for (const image of images.slice().sort((a,b) => a.afterParagraph - b.afterParagraph)) {
     if (!image.generatedPath || !fs.existsSync(image.generatedPath) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1) throw new Error('Approved image file and paragraph position required');
+    await focusEditor(page);
     const paragraphSelector = '.se-component[data-a11y-title="본문"] .se-text-paragraph';
     const paragraphs = frame.locator(paragraphSelector);
     const nonemptyIndexes = (await naverParagraphTexts(page, paragraphSelector)).flatMap((text, index) => text.trim() ? [index] : []);
@@ -316,6 +360,14 @@ export async function openEditor(job, editorUrl, mapping = null) {
   const url = new URL(editorUrl);
   const allowed = channels[job.channel];
   if (!allowed || url.protocol !== 'https:' || !allowed(url.hostname)) throw new Error('Editor URL is not allowed for this channel');
+  // A republish can revisit the same account while its previous editor context is still open.
+  // Close only this job's old editor before launching the persistent profile again.
+  for (const [id, session] of sessions) {
+    if (session.jobId !== job.id) continue;
+    if (session.attached) await session.page.close();
+    else await session.context.close();
+    sessions.delete(id);
+  }
   const cdpEndpoint = process.env.POSTGEN_BROWSER_CDP_ENDPOINT || process.env.POSTGEN_EDGE_CDP_ENDPOINT;
   const attached = Boolean(cdpEndpoint);
   const { context } = attached
@@ -395,8 +447,27 @@ async function naverTagItems(frame) {
   });
 }
 
+export function assertNaverBodyHasNoHashtags(body, tags = []) {
+  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  const approvedLine = tags.map(tag => `#${tag}`).join(' ');
+  if (approvedLine && lines[0] === approvedLine) lines.shift();
+  if (/(^|[^\p{L}\p{N}_])#[\p{L}\p{N}_]+/u.test(lines.join('\n'))) throw new Error('Naver body contains an unapproved hashtag-like # pattern; remove or rewrite it before editor input');
+}
+
+export async function verifyNaverTags(frame, tags) {
+  const registered = await naverTagItems(frame);
+  const expected = new Set(tags);
+  if (registered.length !== expected.size || registered.some(tag => !expected.has(tag))) {
+    throw new Error(`Naver tags differ from approved draft (approved: ${tags.join(', ') || 'none'}; registered: ${registered.join(', ') || 'none'})`);
+  }
+  return registered;
+}
+
 export async function enterNaverTags(frame, page, tags) {
-  if (!tags.length) return [];
+  const initial = await naverTagItems(frame);
+  if (initial.some(tag => !tags.includes(tag))) return verifyNaverTags(frame, tags);
+  const missing = tags.filter(tag => !initial.includes(tag));
+  if (!missing.length) return verifyNaverTags(frame, tags);
   const candidates = [
     frame.locator('input[placeholder*="태그"]').filter({ visible: true }),
     frame.locator('input[aria-label*="태그"]').filter({ visible: true }),
@@ -406,7 +477,7 @@ export async function enterNaverTags(frame, page, tags) {
     for (const candidate of candidates) if (await candidate.count() === 1) return candidate;
     throw new Error('Naver tag field is unavailable or ambiguous; check the publish panel');
   })();
-  for (const tag of tags) {
+  for (const tag of missing) {
     await tagInput.fill(tag);
     await tagInput.press('Enter');
     let found = false;
@@ -416,9 +487,7 @@ export async function enterNaverTags(frame, page, tags) {
     }
     if (!found) throw new Error(`Naver tag was not confirmed: ${tag}`);
   }
-  const registered = await naverTagItems(frame);
-  if (tags.some(tag => !registered.includes(tag))) throw new Error('Naver tag readback differs from approved draft');
-  return tags;
+  return verifyNaverTags(frame, tags);
 }
 export async function configurePlatformReservation(page, channel, at, tags = []) {
   const target = seoulScheduleParts(at);
@@ -526,25 +595,37 @@ export async function recheckNaverReservation(job) {
 export async function submitPlatformReservation(sessionId, job, beforeSubmit = async () => {}) {
   const session = sessions.get(sessionId);
   if (!session || session.jobId !== job.id || session.channel !== job.channel || session.accountHandle !== job.accountHandle) throw new Error('Editor session does not match approved account');
-  const editor = await readEditorSession(sessionId);
-  if (editor.title.trim() !== job.draft.title.trim() || editor.body.trim() !== job.draft.body.trim()) throw new Error('Editor content differs from approved draft');
-  if (!session.mapping && job.draft.images.length) {
-    const currentSources = await nativeImageSources(session.page, job.channel);
-    if (currentSources.length !== job.draft.images.length || JSON.stringify(currentSources) !== JSON.stringify(session.imageSources)) throw new Error('Approved images changed or disappeared from editor');
-  }
-  const configured = await configurePlatformReservation(session.page, job.channel, job.schedule.at, job.draft.tags || []);
-  if (configured.publishAt !== job.schedule.at) throw new Error('Reservation time mismatch');
+  await stage('편집기 재확인', session.page, async () => {
+    if (job.channel === 'naver') assertNaverBodyHasNoHashtags(job.draft.body, job.draft.tags || []);
+    const editor = await readEditorSession(sessionId);
+    if (editor.title.trim() !== job.draft.title.trim() || editor.body.trim() !== job.draft.body.trim()) throw new Error('Editor content differs from approved draft');
+    if (!session.mapping && job.draft.images.length) {
+      const currentSources = await nativeImageSources(session.page, job.channel);
+      if (currentSources.length !== job.draft.images.length || JSON.stringify(currentSources) !== JSON.stringify(session.imageSources)) throw new Error('Approved images changed or disappeared from editor');
+    }
+  });
+  await stage('예약 시각·태그 설정', session.page, async () => {
+    const configured = await configurePlatformReservation(session.page, job.channel, job.schedule.at, job.draft.tags || []);
+    if (configured.publishAt !== job.schedule.at) throw new Error('Reservation time mismatch');
+  });
   const before = job.channel === 'naver' ? session.page.frames().find(frame => frame.name() === 'mainFrame')?.url() : session.page.url();
   let listedBefore = 0;
   if (job.channel === 'naver') {
     const buttons = session.page.frameLocator('iframe#mainFrame').getByRole('button', { name: '발행', exact: true });
-    if (await buttons.count() !== 2) throw new Error('Naver final reservation button is ambiguous');
-    // Read the list before submitting so an existing reservation with the same title and time cannot count as this one.
-    listedBefore = naverReservationListCount(await readNaverReservationList(session.context, job.accountHandle), job.draft.title, job.schedule.at);
+    await stage('발행 버튼 확인', session.page, async () => {
+      if (await buttons.count() !== 2) throw new Error('Naver final reservation button is ambiguous');
+      // Read the list before submitting so an existing reservation with the same title and time cannot count as this one.
+      listedBefore = naverReservationListCount(await readNaverReservationList(session.context, job.accountHandle), job.draft.title, job.schedule.at);
+    });
+    // Reading the list opens and closes another tab; stage() brings the editor back before the tag check and final click.
+    await stage('태그 최종 확인', session.page, () => verifyNaverTags(session.page.frameLocator('iframe#mainFrame'), job.draft.tags || []));
+    await focusEditor(session.page);
     await beforeSubmit();
     await buttons.last().click();
   } else {
-    if (await session.page.locator('#publish-btn').count() !== 1) throw new Error('Tistory final reservation button is ambiguous');
+    await stage('발행 버튼 확인', session.page, async () => {
+      if (await session.page.locator('#publish-btn').count() !== 1) throw new Error('Tistory final reservation button is ambiguous');
+    });
     await beforeSubmit();
     await session.page.locator('#publish-btn').click();
   }

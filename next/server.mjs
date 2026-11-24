@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { republishJob, createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { republishJob, createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { generateDraft, generatePlan } from './generate.mjs';
 import { projectNameForSources } from './post-metadata.mjs';
 import { evaluateDraft } from './evaluate.mjs';
@@ -61,6 +61,15 @@ function editorUrlFor(account) {
   if (account.channel === 'tistory') return `https://${account.handle}.tistory.com/manage/newpost`;
   throw new Error('No native browser editor for this channel');
 }
+// Keep the failed step and reason on the job; the on-screen message disappears after a few seconds.
+async function withAutomationRecord(jobId, step, action) {
+  try { return await action(); }
+  catch (error) {
+    try { mutateState(current => recordAutomationError(current, jobId, { step, stage: error?.stage, message: error?.message || String(error) })); }
+    catch (recordError) { process.stderr.write(`Automation error record failed: ${recordError.message}\n`); }
+    throw error;
+  }
+}
 async function registerBrowserReservation(jobId, sessionId) {
   const job = loadState().jobs.find(item => item.id === jobId);
   const account = loadRegistry().accounts.find(item => item.id === job?.accountId);
@@ -75,8 +84,9 @@ async function registerBrowserReservation(jobId, sessionId) {
     const state = result.verified ? mutateState(current => confirmPlatformSchedule(current, jobId, result)) : mutateState(current => markScheduleUnknown(current, jobId, result.reason));
     return { result, state };
   } catch (error) {
-    if (!submitting) return { result: { verified: false, reason: String(error.message).slice(0,300), notSubmitted: true }, state: loadState() };
-    const state = mutateState(current => markScheduleUnknown(current, jobId, error.message));
+    const failure = { step: 'registration', stage: error?.stage, message: error?.message || String(error) };
+    if (!submitting) return { result: { verified: false, reason: String(failure.message).slice(0,300), notSubmitted: true }, state: mutateState(current => recordAutomationError(current, jobId, failure)) };
+    const state = mutateState(current => recordAutomationError(markScheduleUnknown(current, jobId, failure.message), jobId, failure));
     return { result: { verified: false, reason: String(error.message).slice(0,300) }, state };
   }
 }
@@ -147,7 +157,7 @@ const server = http.createServer(async (req, res) => {
       output.draft.standard = standardRecord(standard);
       usageEntries.push({ step, usage: output.usage });
       mutateState(latest => recordModelUsage(latest, job.id, step, output.usage));
-      const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics));
+      const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics, { channel: account.channel }));
       const usage = summarizeUsage(usageEntries);
       return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
     }
@@ -182,7 +192,9 @@ const server = http.createServer(async (req, res) => {
       if (existingJob.status !== 'draft') throw new Error('Only an existing draft can be edited');
       if (existingJob.status === 'draft' && (!input.lockToken || !Number.isInteger(input.expectedDraftRevision))) throw new Error('Draft edit lock and revision required');
       const options = existingJob.status === 'draft' ? { draftLockToken: input.lockToken, expectedDraftRevision: input.expectedDraftRevision } : undefined;
-      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, { ...input.draft, standard: existingJob.draft?.standard || null }, input.diagnostics || []), options) });
+      const account = loadRegistry().accounts.find(item => item.id === existingJob.accountId);
+      if (!account) throw new Error('Account no longer exists');
+      return json(res, 200, { state: mutateState(current => setDraft(current, input.jobId, { ...input.draft, standard: existingJob.draft?.standard || null }, input.diagnostics || [], { channel: account.channel }), options) });
     }
     if (url.pathname === '/api/images/approve-plan') {
       if (input.assetId && !loadRegistry().assets?.some(asset => asset.id === input.assetId && asset.accountId === loadState().jobs.find(job => job.id === input.jobId)?.accountId)) throw new Error('Asset belongs to another account');
@@ -279,7 +291,7 @@ const server = http.createServer(async (req, res) => {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const account = loadRegistry().accounts.find(item => item.id === job?.accountId);
       if (job?.status !== 'preparing' || !account) throw new Error('Job is not preparing');
-      const result = await openEditor({ ...job, channel: account.channel }, input.editorUrl || editorUrlFor(account), input.mapping || null);
+      const result = await withAutomationRecord(job.id, 'prepare-browser', () => openEditor({ ...job, channel: account.channel }, input.editorUrl || editorUrlFor(account), input.mapping || null));
       if (result.loginRequired) return json(res, 200, result);
       const state = mutateState(current => reviewPreparation(current, job.id, result.editor));
       return json(res, 200, { ...result, state });
@@ -288,7 +300,7 @@ const server = http.createServer(async (req, res) => {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const account = loadRegistry().accounts.find(item => item.id === job?.accountId);
       if (job?.status !== 'preparing' || !account) throw new Error('Job is not preparing');
-      const result = await resumeEditorSession(input.sessionId, { ...job, channel: account.channel });
+      const result = await withAutomationRecord(job.id, 'prepare-browser', () => resumeEditorSession(input.sessionId, { ...job, channel: account.channel }));
       const state = mutateState(current => reviewPreparation(current, job.id, result.editor));
       return json(res, 200, { ...result, state });
     }
@@ -319,6 +331,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/review') return json(res, 200, { state: mutateState(current => reviewPreparation(current, input.jobId, input.editor)) });
     if (url.pathname === '/api/publication') return json(res, 200, { state: mutateState(current => recordPublication(current, input.jobId, input.publication)) });
     if (url.pathname === '/api/publication/manual') return json(res, 200, { state: mutateState(current => markManualPublication(current, input.jobId)) });
+    if (url.pathname === '/api/publication/implicit/undo') return json(res, 200, { state: mutateState(current => declineImplicitPublication(current, input.jobId)) });
     if (url.pathname === '/api/publication/manual/undo') return json(res, 200, { state: mutateState(current => unmarkManualPublication(current, input.jobId)) });
     if (url.pathname === '/api/cancel') return json(res, 200, { state: mutateState(current => cancelJob(current, input.jobId)) });
     if (url.pathname === '/api/publication/republish') return json(res, 200, { state: mutateState(current => republishJob(current, input.jobId, input.at, { platformChecked: input.platformChecked === true })) });
