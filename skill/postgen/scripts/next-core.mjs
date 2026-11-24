@@ -344,6 +344,7 @@ export function scheduleJob(state, id, at, now = new Date()) {
   return change(state, id, ['approved'], job => {
     if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate before scheduling');
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
+    if (Date.parse(at) % (10 * 60_000) !== 0) throw new Error('Schedule must use ten-minute increments');
     job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
     job.registration = null;
     job.status = 'awaiting_registration';
@@ -354,6 +355,7 @@ export function scheduleJob(state, id, at, now = new Date()) {
 export function publishDraftReservation(state, id, at, { conflictAcknowledged = false, standardUnverifiedAcknowledged = false } = {}, now = new Date()) {
   return change(state, id, ['draft'], job => {
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
+    if (Date.parse(at) % (10 * 60_000) !== 0) throw new Error('Schedule must use ten-minute increments');
     if (!job.draft) throw new Error('Missing draft');
     const standardUnverified = !hasDraftStandard(job.draft);
     if (standardUnverified && !standardUnverifiedAcknowledged) throw new Error('Unverified draft standard requires explicit publication confirmation');
