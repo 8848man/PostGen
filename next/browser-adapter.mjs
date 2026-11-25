@@ -628,6 +628,31 @@ export async function readNaverReservationList(context, handle) {
   }
 }
 
+// Tistory post list (checked on the real list, 2026-11-25): each .post_cont has a.link_cont[title] with
+// span.info_status "[예약]" and span.txt_info "YYYY-MM-DD HH:MM" in Seoul time. Entries are matched one by one,
+// so one post's title cannot pair with another post's time.
+export function tistoryReservationEntries(entries, title, at) {
+  const target = seoulScheduleParts(at);
+  const expected = `${target.year}-${String(target.month).padStart(2, '0')}-${String(target.day).padStart(2, '0')} ${target.hour}:${target.minute}`;
+  return entries.filter(entry => entry.title === title.trim() && entry.status.includes('예약') && entry.times.includes(expected));
+}
+
+// Open a separate tab only to read the post list (first page, newest first), then close it. Never edits or publishes.
+export async function readTistoryPostList(context, handle) {
+  const page = await context.newPage();
+  try {
+    await page.goto(`https://${handle}.tistory.com/manage/posts/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // The list renders after load; a blog with no posts never shows an entry, which reads as an empty list.
+    await page.locator('.post_cont').first().waitFor({ state: 'visible', timeout: 15_000 }).catch(() => {});
+    return await page.locator('.post_cont').evaluateAll(items => items.map(item => {
+      const link = item.querySelector('a.link_cont');
+      return { title: (link?.getAttribute('title') || '').trim(), status: (item.querySelector('.info_status')?.textContent || '').trim(), times: [...item.querySelectorAll('.txt_info')].map(element => element.textContent.trim()), url: link?.href || null };
+    }));
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
 // Re-check an uncertain (unknown) Naver submission by reading the reservation list. Never edits or publishes.
 // Exactly one entry with the approved title and Seoul time confirms it; none or duplicates stay unknown for the user to inspect.
 export async function recheckNaverReservation(job) {
@@ -663,7 +688,7 @@ export async function submitPlatformReservation(sessionId, job, beforeSubmit = a
     if (configured.publishAt !== job.schedule.at) throw new Error('Reservation time mismatch');
   });
   const before = job.channel === 'naver' ? session.page.frames().find(frame => frame.name() === 'mainFrame')?.url() : session.page.url();
-  let listedBefore = 0;
+  let listedBefore = 0, tistoryBefore = [];
   if (job.channel === 'naver') {
     const buttons = session.page.frameLocator('iframe#mainFrame').getByRole('button', { name: '발행', exact: true });
     await stage('발행 버튼 확인', session.page, async () => {
@@ -679,6 +704,8 @@ export async function submitPlatformReservation(sessionId, job, beforeSubmit = a
   } else {
     await stage('발행 버튼 확인', session.page, async () => {
       if (await session.page.locator('#publish-btn').count() !== 1) throw new Error('Tistory final reservation button is ambiguous');
+      // Read the list before submitting so an existing reservation with the same title and time cannot count as this one.
+      tistoryBefore = tistoryReservationEntries(await readTistoryPostList(session.context, job.accountHandle), job.draft.title, job.schedule.at);
     });
     await stage('태그 최종 확인', session.page, () => verifyTistoryTags(session.page, job.draft.tags || []));
     await beforeSubmit();
@@ -695,6 +722,16 @@ export async function submitPlatformReservation(sessionId, job, beforeSubmit = a
     if (listedAfter !== listedBefore + 1) return { verified: false, reason: `Naver reservation list does not show one new entry with the approved title and exact Seoul time (before ${listedBefore}, after ${listedAfter}); inspect platform before retrying`, candidateUrl: candidate };
     const logNo = (() => { try { return new URL(candidate).searchParams.get('logNo'); } catch { return null; } })();
     return { verified: true, accountHandle: job.accountHandle, publishAt: job.schedule.at, evidence: 'Naver editor reservation list gained one entry with the approved title and exact Seoul publication time', remoteId: logNo, reservationUrl: channels.naver(new URL(candidate).hostname) ? candidate : null };
+  }
+  if (job.channel === 'tistory') {
+    // After submitting, Tistory goes to the post list, which renders late; read it again in its own tab.
+    let after = [];
+    try { after = tistoryReservationEntries(await readTistoryPostList(session.context, job.accountHandle), job.draft.title, job.schedule.at); }
+    catch (error) { return { verified: false, reason: `Tistory post list could not be read (${error.message}); inspect platform before retrying`, candidateUrl: candidate }; }
+    const added = after.filter(entry => !tistoryBefore.some(previous => previous.url === entry.url));
+    if (after.length !== tistoryBefore.length + 1 || added.length !== 1) return { verified: false, reason: `Tistory post list does not show one new [예약] entry with the approved title and exact Seoul time (before ${tistoryBefore.length}, after ${after.length}); inspect platform before retrying`, candidateUrl: candidate };
+    const remoteId = (() => { try { return new URL(added[0].url).pathname.match(/^\/(\d+)$/)?.[1] || null; } catch { return null; } })();
+    return { verified: true, accountHandle: job.accountHandle, publishAt: job.schedule.at, evidence: 'Tistory post list gained one [예약] entry with the approved title and exact Seoul publication time', remoteId, reservationUrl: added[0].url && channels.tistory(new URL(added[0].url).hostname) ? added[0].url : null };
   }
   const visible = job.channel === 'naver' ? await session.page.frameLocator('iframe#mainFrame').locator('body').innerText().catch(() => '') : await session.page.locator('body').innerText().catch(() => '');
   const allowed = channels[job.channel];
