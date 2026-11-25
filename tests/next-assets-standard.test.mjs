@@ -38,15 +38,16 @@ test('standard is off unless the library command line is configured', async () =
   assert.equal(assetsStandardConfig({ POSTGEN_ASSETS_CLI: 'x/cli.py' }).sets.naver, 'naver-blog-post');
 });
 
-test('Tistory shares the Naver set by default and asks the library with a Tistory task line', async () => {
-  assert.equal(assetsStandardConfig({}).sets.tistory, 'naver-blog-post');
-  assert.equal(assetsStandardConfig({ POSTGEN_ASSETS_SET_TISTORY: 'tistory-blog-post' }).sets.tistory, 'tistory-blog-post');
+test('Tistory uses its own set by default and asks the library with a Tistory task line', async () => {
+  assert.equal(assetsStandardConfig({}).sets.tistory, 'tistory-blog-post');
+  assert.equal(assetsStandardConfig({ POSTGEN_ASSETS_SET_TISTORY: 'naver-blog-post' }).sets.tistory, 'naver-blog-post');
   assert.equal(standardTask('tistory', '주제'), '티스토리 블로그 포스트: 주제');
   assert.equal(standardTask('naver', '주제'), '네이버 블로그 포스트: 주제');
   let call;
-  const standard = await loadAssetsStandard({ channel: 'tistory', task: standardTask('tistory', '주제') }, { ...assetsStandardConfig({}), cli: 'C:/lib/app/core/cli.py' }, async (python, args) => { call = args; return { code: 0, stdout: raw, stderr: '' }; });
-  assert.deepEqual(call.slice(1, 5), ['standard', '티스토리 블로그 포스트: 주제', '--set', 'naver-blog-post']);
-  assert.equal(standard.set, 'naver-blog-post');
+  const tistoryRaw = raw.replaceAll('naver-blog-post', 'tistory-blog-post');
+  const standard = await loadAssetsStandard({ channel: 'tistory', task: standardTask('tistory', '주제') }, { ...assetsStandardConfig({}), cli: 'C:/lib/app/core/cli.py' }, async (python, args) => { call = args; return { code: 0, stdout: tistoryRaw, stderr: '' }; });
+  assert.deepEqual(call.slice(1, 5), ['standard', '티스토리 블로그 포스트: 주제', '--set', 'tistory-blog-post']);
+  assert.equal(standard.set, 'tistory-blog-post');
 });
 
 test('standard is loaded with the channel set, no approval gate, as JSON; failures are not silent', async () => {

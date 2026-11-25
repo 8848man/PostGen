@@ -5,9 +5,8 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
 
-// Tistory shares the Naver blog set until the library has a Tistory set (user decision, 2026-11-25).
-// POSTGEN_ASSETS_SET_TISTORY overrides it once one exists.
-const DEFAULT_SETS = { naver: 'naver-blog-post', tistory: 'naver-blog-post' };
+// Tistory has its own set since 2026-11-25 (polite informational tone; N-026). Environment variables override either.
+const DEFAULT_SETS = { naver: 'naver-blog-post', tistory: 'tistory-blog-post' };
 const CHANNEL_LABELS = { naver: '네이버', tistory: '티스토리' };
 
 // The task line sent to the library; generation and evaluation must send the same one for the same draft.
