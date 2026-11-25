@@ -4,9 +4,10 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "test:smoke": "npm run test:browser && npm run test:review",
+    "test:smoke": "npm run test:browser && npm run test:review && npm run test:server",
     "test:browser": "node tests/browser-smoke.mjs",
     "test:review": "node tests/review-dashboard-smoke.mjs",
+    "test:server": "node tests/next-server-smoke.mjs",
     "test:assets-live": "node scripts/test-assets-live.mjs",
     "settings": "node skill/postgen/scripts/settings-server.mjs",
     "collect": "node skill/postgen/scripts/collect.mjs",
