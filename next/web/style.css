@@ -88,3 +88,10 @@ button { background: #2061ba; color: white; border: 0; border-radius: 9px; paddi
 #message:empty { display: none; }
 @media(max-width: 1100px) { .review-workspace { grid-template-columns: 1fr 1fr; } .review-column:last-child { grid-column: 1 / -1; } .review-column { min-height: 0; } }
 @media(max-width: 700px) { main { padding: 0 14px 60px; } .hero { margin: 0 -14px; padding: 28px 18px; } .review-workspace, .management-content { grid-template-columns: 1fr; } .review-column:last-child { grid-column: auto; } .review-column { padding: 20px; } .management-content { padding: 0 14px 14px; } }
+.posting-account { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid #e1e9f3; }
+.posting-account form { display: flex; gap: 8px; flex: 1 1 360px; }
+.posting-account form input { flex: 1; }
+.login-badge { padding: 4px 12px; border-radius: 999px; font-size: 0.85em; }
+.login-badge.logged_in { background: #e3f4ea; color: #17663a; }
+.login-badge.logged_out { background: #fde8e6; color: #a3261b; }
+.login-badge.unknown, .login-badge.checking { background: #eef2f7; color: #4f5f75; }

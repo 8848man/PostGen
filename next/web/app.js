@@ -145,8 +145,74 @@ async function submitJob(event) {
     await refresh();
   } catch (error) { say(error.message); }
 }
+let loginStatuses = {}, loginCheckedAt = 0;
+const loginLabels = { logged_in: '로그인됨', logged_out: '로그인 필요', unknown: '확인 불가', checking: '확인 중' };
+function postingAccountRow(entry, account) {
+  const row = document.createElement('div');
+  row.className = 'posting-account';
+  const name = document.createElement('strong');
+  name.textContent = `${channelLabels[account.channel] || account.channel} · ${account.handle}`;
+  const status = loginStatuses[account.id];
+  const state = status?.state || 'checking';
+  const badge = document.createElement('button');
+  badge.type = 'button';
+  badge.className = `login-badge ${state}`;
+  badge.textContent = loginLabels[state];
+  badge.title = state === 'logged_in' ? '포스팅용 크롬에서 포스팅 페이지 열기' : `포스팅용 크롬에서 로그인 페이지 열기${status?.reason ? ` (${status.reason})` : ''}`;
+  badge.onclick = () => openPostingLogin(account.id, state === 'logged_in').catch(error => say(error.message));
+  const form = document.createElement('form');
+  const input = document.createElement('input');
+  input.name = 'postingUrl';
+  input.value = entry.custom ? entry.postingUrl : '';
+  input.placeholder = entry.postingUrl || entry.error || '';
+  input.setAttribute('aria-label', `${account.handle} 포스팅 주소`);
+  const save = document.createElement('button');
+  save.textContent = '주소 저장';
+  form.append(input, save);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    try {
+      await api('/api/account/posting-url', { accountId: account.id, postingUrl: input.value });
+      say(input.value.trim() ? '포스팅 주소를 저장했습니다.' : '기본 포스팅 주소로 되돌렸습니다.');
+      await refresh();
+      await checkPostingLogins();
+    } catch (error) { say(error.message); }
+  };
+  row.append(name, badge, form);
+  return row;
+}
+function renderPostingAccounts() {
+  const list = document.querySelector('#posting-accounts');
+  // The list is rebuilt on every refresh; keep an address the user is typing.
+  if (list.contains(document.activeElement)) return;
+  list.replaceChildren();
+  for (const entry of cache?.postingAccounts || []) {
+    const account = cache.registry.accounts.find(item => item.id === entry.accountId);
+    if (account) list.append(postingAccountRow(entry, account));
+  }
+  if (!list.children.length) list.textContent = '네이버·티스토리 계정을 추가하면 여기에 표시됩니다.';
+}
+async function checkPostingLogins() {
+  loginCheckedAt = Date.now();
+  for (const entry of cache?.postingAccounts || []) loginStatuses[entry.accountId] = { state: 'checking' };
+  renderPostingAccounts();
+  try {
+    const { statuses } = await api('/api/login-status', {});
+    loginStatuses = Object.fromEntries(statuses.map(status => [status.accountId, status]));
+  } catch (error) {
+    for (const entry of cache?.postingAccounts || []) loginStatuses[entry.accountId] = { state: 'unknown', reason: error.message };
+  }
+  renderPostingAccounts();
+}
+async function openPostingLogin(accountId, loggedIn) {
+  const result = await api('/api/login-open', { accountId, loggedIn });
+  if (result.opened) return say(loggedIn ? '포스팅용 크롬에 포스팅 페이지를 열었습니다.' : '포스팅용 크롬에 로그인 페이지를 열었습니다. 로그인한 뒤 이 화면으로 돌아오면 다시 확인합니다.', 12_000);
+  window.open(result.url, '_blank', 'noopener');
+  say(`포스팅용 크롬에 연결하지 못해 이 브라우저에서 열었습니다. ${result.reason || ''}`, 12_000);
+}
 async function refresh() {
   cache = await api('/api/state');
+  renderPostingAccounts();
   const settingsForm = document.querySelector('#settings');
   for (const name of ['retentionMonths', 'maxImageGenerations']) settingsForm.elements[name].value = String(cache.settings[name]);
   for (const name of ['backgroundNotifications', 'autoImageCheck']) settingsForm.elements[name].checked = cache.settings[name];
@@ -388,5 +454,8 @@ document.querySelector('#connector').onsubmit = async event => { event.preventDe
 document.querySelector('#discover').onclick = async () => { try { const catalog = await api('/api/discover'); const list = document.querySelector('#record-list'); list.replaceChildren(); for (const source of catalog.sources) { const row = document.createElement('label'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'record-source'; checkbox.value = source.sourceId; row.append(checkbox, ` ${source.provider}: ${source.preview}`); list.append(row); } } catch (error) { say(error.message); } };
 document.querySelector('#job').onsubmit = submitJob;
 const projectField = document.createElement('label'); projectField.textContent = '프로젝트 표시명 (원본 경로에서 알 수 있으면 자동 적용)'; const projectInput = document.createElement('input'); projectInput.name = 'projectName'; projectInput.maxLength = 80; projectInput.placeholder = '예: PostGen'; projectField.append(projectInput); document.querySelector('#job').querySelector('[name="audience"]').closest('label').before(projectField);
-refresh().catch(error => say(error.message));
+refresh().then(checkPostingLogins).catch(error => say(error.message));
+document.querySelector('#login-recheck').onclick = () => checkPostingLogins();
+// After logging in from a badge the user comes back to this tab; re-check then, at most every 15 seconds.
+window.addEventListener('focus', () => { if (Date.now() - loginCheckedAt > 15_000) checkPostingLogins(); });
 setInterval(() => refresh().catch(error => say(error.message)), 60_000);
