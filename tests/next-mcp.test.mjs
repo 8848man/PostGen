@@ -19,4 +19,7 @@ test('MCP tool list approval gates source reads and draft preparation', async ()
   const taggedNaver = { ...job, channel: 'naver', draft: { ...job.draft, tags: ['PostGen'] } };
   await assert.rejects(prepareWithMcp(config, 'prepare_draft', taggedNaver), /browser preparation/);
   await assert.rejects(registerScheduledWithMcp(config, 'schedule_post', taggedNaver), /browser registration/);
+  const taggedTistory = { ...job, channel: 'tistory', draft: { ...job.draft, tags: ['PostGen'] } };
+  await assert.rejects(prepareWithMcp(config, 'prepare_draft', taggedTistory), /browser preparation/);
+  await assert.rejects(registerScheduledWithMcp(config, 'schedule_post', taggedTistory), /browser registration/);
 });
