@@ -13,3 +13,17 @@ test('generation applies the project prefix and keeps five suggested tags', asyn
   assert.equal(result.draft.title, '[PostGen] 검토 화면');
   assert.deepEqual(result.draft.tags, ['PostGen', '블로그', '검토', '원본', '초안']);
 });
+
+test('generated Naver tags become single words so the body tag line can be saved', async () => {
+  const result = await generateDraft(input, {}, async () => ({ result: { title: '제목', tags: ['네이버 블로그', '예약-발행', '네이버블로그', 'AI'], body: '본문', headings: [], claims: [], images: [], diagnostics: [] } }));
+  assert.deepEqual(result.draft.tags, ['네이버블로그', '예약발행', 'AI']);
+  assert.ok(result.diagnostics.some(item => item.code === 'naver_tags_squeezed'));
+  const tistory = await generateDraft({ ...input, account: { channel: 'tistory', handle: 'me' } }, {}, async () => ({ result: { title: '제목', tags: ['네이버 블로그'], body: '본문', headings: [], claims: [], images: [], diagnostics: [] } }));
+  assert.deepEqual(tistory.draft.tags, ['네이버 블로그']);
+});
+
+test('Naver draft prompt asks for single-word tags', async () => {
+  let prompt = '';
+  await generateDraft(input, {}, async text => { prompt = text; return { result: { title: '제목', tags: [], body: '본문', headings: [], claims: [], images: [], diagnostics: [] } }; });
+  assert.match(prompt, /single word with no spaces/);
+});
