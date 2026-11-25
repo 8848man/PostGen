@@ -11,7 +11,7 @@ import { republishJob, createCampaign, setCampaignPlan, recordModelUsage, setDra
 import { generateDraft, generatePlan } from './generate.mjs';
 import { projectNameForSources } from './post-metadata.mjs';
 import { evaluateDraft } from './evaluate.mjs';
-import { assetsStandardConfig, loadAssetsStandard, standardRecord, imageRequest } from './assets-standard.mjs';
+import { assetsStandardConfig, loadAssetsStandard, standardRecord, imageRequest, standardTask } from './assets-standard.mjs';
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, importGeneratedImage, previewGeneratedImage, discardGeneratedImage } from './images.mjs';
@@ -149,7 +149,7 @@ const server = http.createServer(async (req, res) => {
       if (shared && !job.plan) { let planned; try { planned = await generatePlan(job.sources, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, 'shared-plan', error.usage, { campaign: true })); throw error; } usageEntries.push({ step: 'shared-plan', usage: planned.usage }); mutateState(latest => recordModelUsage(latest, job.id, 'shared-plan', planned.usage, { campaign: true })); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
       // The user's Assets Manager standard is loaded per draft; the task is the shared plan's angle,
       // so the library can also pick related past outputs as examples.
-      const standard = await loadAssetsStandard({ channel: account.channel, task: `${account.channel === 'naver' ? '네이버' : account.channel} 블로그 포스트: ${job.plan?.angle || job.audience}` });
+      const standard = await loadAssetsStandard({ channel: account.channel, task: standardTask(account.channel, job.plan?.angle || job.audience) });
       const revisionRequest = job.review && job.draft ? { decision: job.review.decision, note: job.review.note, previousTitle: job.draft.title, previousBody: job.draft.body.slice(0, 12_000), previousBodyTruncated: job.draft.body.length > 12_000 } : null;
       const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan, standard, revisionRequest, projectName: job.projectName || projectNameForSources(job.sources) };
       const step = shared ? 'draft' : 'plan-and-draft';
@@ -166,7 +166,7 @@ const server = http.createServer(async (req, res) => {
       if (job?.status !== 'draft' || !job.draft?.standard?.sha256) throw new Error('Draft with applied standard is required for evaluation');
       const registry = loadRegistry(), account = registry.accounts.find(item => item.id === job.accountId);
       if (!account) throw new Error('Account no longer exists');
-      const standard = await loadAssetsStandard({ channel: account.channel, task: `${account.channel} 블로그 포스트: ${job.plan?.angle || job.audience}` });
+      const standard = await loadAssetsStandard({ channel: account.channel, task: standardTask(account.channel, job.plan?.angle || job.audience) });
       if (!standard || standard.sha256 !== job.draft.standard.sha256) throw new Error('Assets Manager standard changed; regenerate the draft before evaluation');
       const sample = resolveAccount(registry, account.channel, account.handle).sample;
       const modelOptions = { provider: input.provider || job.model, model: input.model };
