@@ -57,9 +57,14 @@ export async function readConnectedSource(config, toolName, args) {
   });
 }
 
+// MCP tools receive no tags, so blog posts with approved tags go through the browser path, which enters and verifies them.
+export function tagsNeedBrowser(channel, tags) {
+  return ['naver', 'tistory'].includes(channel) && Boolean(tags?.length);
+}
+
 export async function prepareWithMcp(config, toolName, job) {
   if (!config.approvedFingerprint) throw new Error('MCP server has not been approved');
-  if (job.channel === 'naver' && job.draft?.tags?.length) throw new Error('Naver posts with tags require browser preparation');
+  if (tagsNeedBrowser(job.channel, job.draft?.tags)) throw new Error('Blog posts with tags require browser preparation');
   return withMcpServer(config, async client => {
     if (client.fingerprint !== config.approvedFingerprint) throw new Error('MCP tool list changed; reapprove server');
     const tool = client.tools.find(item => item.name === toolName);
@@ -73,7 +78,7 @@ export async function prepareWithMcp(config, toolName, job) {
 
 export async function registerScheduledWithMcp(config, toolName, job) {
   if (!config.approvedFingerprint) throw new Error('MCP server has not been approved');
-  if (job.channel === 'naver' && job.draft?.tags?.length) throw new Error('Naver posts with tags require browser registration');
+  if (tagsNeedBrowser(job.channel, job.draft?.tags)) throw new Error('Blog posts with tags require browser registration');
   return withMcpServer(config, async client => {
     if (client.fingerprint !== config.approvedFingerprint) throw new Error('MCP tool list changed; reapprove server');
     const tool = client.tools.find(item => item.name === toolName);

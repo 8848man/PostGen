@@ -489,6 +489,60 @@ export async function enterNaverTags(frame, page, tags) {
   }
   return verifyNaverTags(frame, tags);
 }
+// Tistory tag box: one visible tag input; registered tags are the text of its box (chips such as "#태그").
+// An unknown or ambiguous layout stops before publishing instead of guessing.
+async function tistoryTagInput(page, { required }) {
+  for (const selector of ['#tagText', 'input[placeholder*="태그"]', 'input[aria-label*="태그"]']) {
+    const candidate = page.locator(selector).filter({ visible: true });
+    const count = await candidate.count();
+    if (count === 1) return candidate;
+    if (count > 1) throw new Error('Tistory tag field is ambiguous; check the editor');
+  }
+  if (required) throw new Error('Tistory tag field is unavailable; check the editor');
+  return null;
+}
+
+async function tistoryTagItems(input) {
+  return input.evaluate(element => {
+    const box = element.parentElement?.closest('[class*="tag"], [id*="tag"]') || element.parentElement;
+    const values = new Set();
+    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const value = walker.currentNode.nodeValue.trim().replace(/^#/, '');
+      if (value) values.add(value);
+    }
+    return [...values];
+  });
+}
+
+export async function verifyTistoryTags(page, tags) {
+  const input = await tistoryTagInput(page, { required: tags.length > 0 });
+  const registered = input ? await tistoryTagItems(input) : [];
+  const expected = new Set(tags);
+  if (registered.length !== expected.size || registered.some(tag => !expected.has(tag))) {
+    throw new Error(`Tistory tags differ from approved draft (approved: ${tags.join(', ') || 'none'}; registered: ${registered.join(', ') || 'none'})`);
+  }
+  return registered;
+}
+
+export async function enterTistoryTags(page, tags) {
+  const input = await tistoryTagInput(page, { required: tags.length > 0 });
+  if (!input) return [];
+  const initial = await tistoryTagItems(input);
+  if (initial.some(tag => !tags.includes(tag))) return verifyTistoryTags(page, tags);
+  for (const tag of tags.filter(tag => !initial.includes(tag))) {
+    await input.fill(tag);
+    await input.press('Enter');
+    let found = false;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if ((await tistoryTagItems(input)).includes(tag) && !(await input.inputValue()).trim()) { found = true; break; }
+      await page.waitForTimeout(100);
+    }
+    if (!found) throw new Error(`Tistory tag was not confirmed: ${tag}`);
+  }
+  return verifyTistoryTags(page, tags);
+}
+
 export async function configurePlatformReservation(page, channel, at, tags = []) {
   const target = seoulScheduleParts(at);
   if (dateTooSoon(at)) throw new Error('Publication time is too soon for safe reservation');
@@ -515,6 +569,9 @@ export async function configurePlatformReservation(page, channel, at, tags = [])
     return { channel, publishAt: new Date(at).toISOString(), localDate: selected, hour: target.hour, minute: target.minute };
   }
   if (channel === 'tistory') {
+    // Tags live under the editor, not in the publish layer; enter them before opening the layer.
+    // The category is left untouched (empty) by user decision (2026-11-25).
+    await enterTistoryTags(page, tags);
     await page.locator('#publish-layer-btn').click();
     await page.locator('#open20').check();
     await page.getByRole('button', { name: '예약', exact: true }).click();
@@ -626,6 +683,7 @@ export async function submitPlatformReservation(sessionId, job, beforeSubmit = a
     await stage('발행 버튼 확인', session.page, async () => {
       if (await session.page.locator('#publish-btn').count() !== 1) throw new Error('Tistory final reservation button is ambiguous');
     });
+    await stage('태그 최종 확인', session.page, () => verifyTistoryTags(session.page, job.draft.tags || []));
     await beforeSubmit();
     await session.page.locator('#publish-btn').click();
   }

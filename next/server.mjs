@@ -17,7 +17,7 @@ import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, importGeneratedImage, previewGeneratedImage, discardGeneratedImage } from './images.mjs';
 import { runImageAttempts } from './host-image-flow.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
-import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp } from './mcp-client.mjs';
+import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp, tagsNeedBrowser } from './mcp-client.mjs';
 import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckNaverReservation } from './browser-adapter.mjs';
 import { loadSettings, updateSettings } from './settings.mjs';
 import { codexModelOptions } from './codex-models.mjs';
@@ -282,7 +282,7 @@ const server = http.createServer(async (req, res) => {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       if (job?.status !== 'preparing') throw new Error('Job is not preparing');
       const account = loadRegistry().accounts.find(item => item.id === job.accountId);
-      if (account?.channel === 'naver' && job.draft.tags?.length) throw new Error('Naver posts with tags require browser preparation');
+      if (tagsNeedBrowser(account?.channel, job.draft.tags)) throw new Error('Blog posts with tags require browser preparation');
       const connector = loadConnectors().servers.find(item => item.id === input.connectorId);
       if (!connector) throw new Error('Unknown MCP connector');
       return json(res, 200, { result: await prepareWithMcp(connector, input.toolName, job) });
@@ -317,7 +317,7 @@ const server = http.createServer(async (req, res) => {
       const connector = loadConnectors().servers.find(item => item.id === input.connectorId);
       if (job?.status !== 'ready_to_register' || !connector) throw new Error('Approved MCP reservation is not ready');
       const account = loadRegistry().accounts.find(item => item.id === job.accountId);
-      if (account?.channel === 'naver' && job.draft.tags?.length) throw new Error('Naver posts with tags require browser registration to verify tags before publishing');
+      if (tagsNeedBrowser(account?.channel, job.draft.tags)) throw new Error('Blog posts with tags require browser registration to verify tags before publishing');
       mutateState(current => beginScheduleSubmission(current, job.id));
       try {
         const result = await registerScheduledWithMcp(connector, input.toolName, job);
