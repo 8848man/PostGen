@@ -40,7 +40,11 @@ function run(args) {
   if (command === 'draft') {
     const registry = loadRegistry(), current = loadState(), target = job(current, id);
     const account = registry.accounts.find(item => item.id === target.accountId);
-    return job(update(state => setDraft(state, id, input(), [], { channel: account?.channel || null })), id);
+    const draft = input();
+    if (!Array.isArray(draft.images) || draft.images.length === 0) {
+      process.stderr.write('Warning: draft has no image scene suggestions; review images before approving.\n');
+    }
+    return job(update(state => setDraft(state, id, draft, [], { channel: account?.channel || null })), id);
   }
   if (command === 'approve') return job(update(state => approveDraft(state, id, { conflictAcknowledged: args.includes('--conflicts-reviewed') })), id);
   if (command === 'schedule') return job(update(state => scheduleJob(state, id, args[2])), id);

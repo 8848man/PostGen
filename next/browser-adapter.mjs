@@ -678,6 +678,17 @@ export function tistoryReservationEntries(entries, title, at) {
   const expected = `${target.year}-${String(target.month).padStart(2, '0')}-${String(target.day).padStart(2, '0')} ${target.hour}:${target.minute}`;
   return entries.filter(entry => entry.title === title.trim() && entry.status.includes('예약') && entry.times.includes(expected));
 }
+export function tistoryRecheckResult(entries, job) {
+  const matches = tistoryReservationEntries(entries, job.draft.title, job.schedule.at);
+  if (matches.length !== 1) return { verified: false, count: matches.length, reason: matches.length === 0 ? 'Approved title and Seoul time are not in the Tistory post list' : `Tistory post list has ${matches.length} matching reservations; inspect duplicates on the platform` };
+  let reservationUrl;
+  try {
+    const parsed = new URL(matches[0].url);
+    if (parsed.protocol === 'https:' && parsed.hostname === `${job.accountHandle}.tistory.com`) reservationUrl = parsed.href;
+  } catch {}
+  if (!reservationUrl) return { verified: false, count: 1, reason: 'Matching Tistory reservation has no trusted post URL; inspect the platform' };
+  return { verified: true, count: 1, accountHandle: job.accountHandle, publishAt: job.schedule.at, evidence: 'Re-check: Tistory post list shows exactly one [예약] entry with the approved title and Seoul publication time', remoteId: new URL(reservationUrl).pathname.match(/^\/(\d+)$/)?.[1] || null, reservationUrl };
+}
 
 // Open a separate tab only to read the post list (first page, newest first), then close it. Never edits or publishes.
 export async function readTistoryPostList(context, handle) {
@@ -695,15 +706,18 @@ export async function readTistoryPostList(context, handle) {
   }
 }
 
-// Re-check an uncertain (unknown) Naver submission by reading the reservation list. Never edits or publishes.
-// Exactly one entry with the approved title and Seoul time confirms it; none or duplicates stay unknown for the user to inspect.
-export async function recheckNaverReservation(job) {
-  if (job.channel !== 'naver') throw new Error('Reservation list re-check is available for Naver only');
+// Re-check an uncertain submission by reading the channel's reservation list. Never edits or publishes.
+// Exactly one entry with the approved title and Seoul time confirms it; none or duplicates stay unknown.
+export async function recheckPlatformReservation(job) {
+  if (!['naver', 'tistory'].includes(job.channel)) throw new Error('Reservation list re-check is unavailable for this channel');
   const cdpEndpoint = process.env.POSTGEN_BROWSER_CDP_ENDPOINT || process.env.POSTGEN_EDGE_CDP_ENDPOINT;
   const context = cdpEndpoint
     ? (await sharedExistingEdge(cdpEndpoint)).context
     : await chromium.launchPersistentContext(path.join(profileRoot(), job.accountId), { channel: 'msedge', headless: false, acceptDownloads: false });
   try {
+    if (job.channel === 'tistory') {
+      return tistoryRecheckResult(await readTistoryPostList(context, job.accountHandle), job);
+    }
     const listUrl = `https://blog.naver.com/${job.accountHandle}?Redirect=Write&`;
     const count = naverReservationListCount(await readNaverReservationList(context, job.accountHandle), job.draft.title, job.schedule.at);
     if (count !== 1) return { verified: false, count, reason: count === 0 ? 'Approved title and Seoul time are not in the Naver reservation list' : `Naver reservation list has ${count} entries with the approved title and time; remove duplicates on the platform` };

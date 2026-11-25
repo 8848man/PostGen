@@ -56,6 +56,8 @@ Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저�
 
 볼트 원문(`posts/` 등)으로 PostGen 작업(create → plan → draft)을 만들 때는 검토 화면이 쓰는 데이터 폴더에 만든다. 다른 폴더에 만들면 사용자가 검토 화면에서 초안을 볼 수 없다.
 
+초안의 `images`에는 본문 내용에 맞는 이미지 장면 제안과 배치 위치를 포함한다. 이미지 파일을 지금 생성하지 않아도 장면 제안은 작성한다. 이미지 없이 진행하려면 그 선택을 명시하고 CLI 경고를 확인한다.
+
 - 검토 화면 런처(`start-postgen-review.cmd` → `scripts/open-review.mjs`)는 `POSTGEN_DATA_DIR` 환경 변수가 있으면 그 폴더를, 없으면 기존 포스팅용 크롬 데이터 폴더(`%USERPROFILE%\Documents\ChatGPT\new_sample\postgen-data`)를 쓴다. 작업을 만드는 명령에도 같은 `POSTGEN_DATA_DIR`을 넘긴다.
 - 실행 도구 환경의 기본 PostGen 데이터 경로는 검토 화면과 다를 수 있고, 빈 계정 등록부일 수 있다(ISSUE-086). 작업을 만들기 전에 그 폴더의 `account-registry.json`에 대상 게시 계정이 있고 `next/jobs.json`에 기존 작업이 보이는지 확인한다. 둘 다 비어 있으면 작업을 만들지 말고 사용자에게 데이터 폴더를 묻는다.
 - 시험용 데이터는 별도 `POSTGEN_DATA_DIR`로 분리하며, 실제 데이터 폴더에서 시험하지 않는다.
