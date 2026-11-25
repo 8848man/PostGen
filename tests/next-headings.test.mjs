@@ -15,6 +15,12 @@ test('approved draft retains unique heading metadata', () => {
   assert.throws(() => approveDraft(setDraft(state, id, { title: '제목', body: '도입\n본문', headings: ['없는 소제목'], claims: [], images: [], standard }), id), /heading must match/);
 });
 
+test('approval accepts headings that the table of contents repeats (ISSUE-098)', () => {
+  const state = selected(), id = state.jobs[0].id;
+  const drafted = setDraft(state, id, { title: '제목', body: '도입\n목차\n1. 첫째\n2. 둘째\n1. 첫째\n본문\n2. 둘째\n본문', headings: ['1. 첫째', '2. 둘째'], claims: [], images: [], standard });
+  assert.deepEqual(approveDraft(drafted, id).jobs[0].draft.headings, ['1. 첫째', '2. 둘째']);
+});
+
 test('unsubmitted reservation may be cancelled for a corrected draft', () => {
   const state = selected(), id = state.jobs[0].id;
   const drafted = setDraft(state, id, { title: '제목', body: '본문', claims: [], images: [], standard });

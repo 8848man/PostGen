@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { dataDir } from './profile.mjs';
 import { cleanTags, projectNameForSources, projectTitle, withNaverTagLine } from './post-metadata.mjs';
+import { unmatchedHeadings } from './body-structure.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
@@ -205,8 +206,7 @@ export function approveDraft(state, id, { conflictAcknowledged = false } = {}) {
     const imageIds = new Set();
     const paragraphCount = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim()).length;
     for (const image of job.draft.images) { if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || image.afterParagraph > paragraphCount || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and existing paragraph positions'); imageIds.add(image.id); }
-    const bodyLines = job.draft.body.split('\n').map(line => line.trim());
-    for (const heading of job.draft.headings || []) if (bodyLines.filter(line => line === heading).length !== 1) throw new Error('Each heading must match one unique body line');
+    if (unmatchedHeadings(job.draft.body, job.draft.headings).length) throw new Error('Each heading must match one unique body line');
     if (job.draft.images.length && (!job.draft.imagePlanApproved || job.draft.images.some(image => !image.generatedPath || (image.check?.passed === false && !image.check.manualAccepted)))) throw new Error('Generate images and review failed image checks before approval');
     if (job.diagnostics.some(item => item.code === 'source_conflict') && !conflictAcknowledged) throw new Error('Source conflict needs explicit acknowledgement');
     job.approval = { at: new Date().toISOString(), draftRevision: job.draft.revision, conflictAcknowledged };
@@ -370,8 +370,7 @@ export function publishDraftReservation(state, id, at, { conflictAcknowledged = 
       imageIds.add(image.id);
     }
     if (job.draft.images.length) job.draft.imagePlanApproved = true;
-    const bodyLines = job.draft.body.split('\n').map(line => line.trim());
-    for (const heading of job.draft.headings || []) if (bodyLines.filter(line => line === heading).length !== 1) throw new Error('Each heading must match one unique body line');
+    if (unmatchedHeadings(job.draft.body, job.draft.headings).length) throw new Error('Each heading must match one unique body line');
     if (job.diagnostics.some(item => item.code === 'source_conflict') && !conflictAcknowledged) throw new Error('Source conflict needs explicit acknowledgement');
     job.approval = { at: now.toISOString(), draftRevision: job.draft.revision, conflictAcknowledged, ...(standardUnverified ? { standardUnverifiedAcknowledged: true } : {}) };
     job.review = null;
