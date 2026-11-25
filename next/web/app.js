@@ -94,6 +94,57 @@ async function preparedBrowser(jobId, output) {
   if (status === 'ready_to_register') return registerBrowser(jobId, output.sessionId);
   say('편집기 내용이 승인본과 달라 재검토가 필요합니다.');
 }
+function channelCard(job) {
+  const account = cache.registry.accounts.find(item => item.id === job.accountId);
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = `pick-card channel-card ${job.id === selectedJobId ? 'selected' : ''}`;
+  const channel = document.createElement('small');
+  channel.textContent = `${channelLabels[account?.channel] || account?.channel || '채널 미상'} · ${account?.handle || job.accountHandle}`;
+  const title = document.createElement('strong');
+  title.textContent = job.draft?.title || '초안 생성 전';
+  const summary = document.createElement('span');
+  summary.textContent = excerpt(job.draft?.body || '등록된 원본으로 글을 생성할 수 있습니다.', 180);
+  const status = document.createElement('em');
+  status.textContent = job.status === 'draft' && !hasDraftStandard(job) ? displayStatus(job) : job.review ? (job.review.decision === 'rejected' ? '반려됨' : '개선 요청') : displayStatus(job);
+  item.append(channel, title, summary, status);
+  item.onclick = () => { selectedJobId = job.id; refresh().catch(error => say(error.message)); };
+  return item;
+}
+async function importManualImage(job, image) {
+  const asset = (cache.registry.assets || []).find(item => item.id === image.assetId);
+  const { request } = await api('/api/images/request', { jobId: job.id, imageId: image.id });
+  const guide = request
+    ? `Assets Manager 표준(${job.draft.standard.set})의 ImageGen 요청서입니다. ChatGPT에 아래 참조 이미지를 첨부하고 요청서를 붙여 넣어 만드세요.\n\n참조 이미지 파일:\n${request.referencePaths.join('\n')}\n\n${request.text}${asset ? `\n\n승인된 참고 자산(함께 첨부): ${asset.storedPath}` : ''}`
+    : `호스트의 내장 이미지 기능으로 다음 장면을 만드세요: ${image.description}${asset ? `\n승인된 참고 자산: ${asset.storedPath}\n유지할 특징: ${asset.features}` : ''}`;
+  if (request) {
+    try { await navigator.clipboard.writeText(request.text); say('요청서를 클립보드에 복사했습니다.'); } catch {}
+  }
+  const filePath = prompt(`${guide}\n\n생성한 PNG/JPEG/WebP 파일의 절대 경로를 입력하세요.`);
+  if (!filePath) return;
+  if (!confirm('이미지를 직접 열어 내용과 시각 품질을 확인했습니까?')) return;
+  const result = await api('/api/images/import', { jobId: job.id, imageId: image.id, path: filePath, reviewed: true });
+  say(`이미지를 연결했습니다. 사용량: ${result.usage.known ? '확인됨' : '확인 불가'}`);
+}
+async function submitJob(event) {
+  event.preventDefault();
+  try {
+    const form = Object.fromEntries(new FormData(event.target));
+    const accountIds = [...document.querySelector('#accounts').selectedOptions].map(option => option.value);
+    const sources = [];
+    if (form.sourceText.trim()) sources.push({ type: 'text', text: form.sourceText });
+    if (form.sourcePath.trim()) sources.push({ type: 'file', path: form.sourcePath });
+    if (form.sourceUrl.trim()) sources.push({ type: 'url', url: form.sourceUrl });
+    for (const selected of document.querySelectorAll('.record-source:checked')) sources.push({ type: 'ai-record', sourceId: selected.value });
+    if (form.connectorId) {
+      if (!form.sourceToolName.trim()) return say('연결 문서 도구 이름을 입력하세요.');
+      sources.push({ type: 'connected', connectorId: form.connectorId, toolName: form.sourceToolName, args: JSON.parse(form.sourceToolArgs), ref: `${form.connectorId}:${form.sourceToolName}` });
+    }
+    await api('/api/job', { accountIds, audience: form.audience, model: form.model, projectName: form.projectName, sources });
+    event.target.reset();
+    await refresh();
+  } catch (error) { say(error.message); }
+}
 async function refresh() {
   cache = await api('/api/state');
   const settingsForm = document.querySelector('#settings');
@@ -138,7 +189,7 @@ async function refresh() {
   if (!group.some(job => job.id === selectedJobId)) selectedJobId = group.find(job => job.status === 'draft' && job.draft?.images?.length)?.id || group[0]?.id || null;
   rememberSelection();
   const channelJobs = document.querySelector('#channel-jobs'); channelJobs.replaceChildren();
-  for (const job of group) { const account = cache.registry.accounts.find(item => item.id === job.accountId); const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card channel-card ${job.id === selectedJobId ? 'selected' : ''}`; const channel = document.createElement('small'); channel.textContent = `${channelLabels[account?.channel] || account?.channel || '채널 미상'} · ${account?.handle || job.accountHandle}`; const title = document.createElement('strong'); title.textContent = job.draft?.title || '초안 생성 전'; const summary = document.createElement('span'); summary.textContent = excerpt(job.draft?.body || '등록된 원본으로 글을 생성할 수 있습니다.', 180); const status = document.createElement('em'); status.textContent = job.status === 'draft' && !hasDraftStandard(job) ? displayStatus(job) : job.review ? (job.review.decision === 'rejected' ? '반려됨' : '개선 요청') : displayStatus(job); item.append(channel, title, summary, status); item.onclick = () => { selectedJobId = job.id; refresh().catch(error => say(error.message)); }; channelJobs.append(item); }
+  for (const job of group) channelJobs.append(channelCard(job));
   const jobs = document.querySelector('#jobs'); jobs.replaceChildren();
   if (!selectedJobId) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '왼쪽에서 원본을 선택하세요.'; jobs.append(empty); }
   for (const job of cache.state.jobs.filter(item => item.id === selectedJobId)) {
@@ -308,7 +359,7 @@ async function refresh() {
     if (job.status === 'draft' && job.draft.imagePlanApproved) for (const image of job.draft.images) {
       if (image.generationHistory?.length) { const tokens = image.generationHistory.reduce((sum, entry) => sum + [entry.usage, entry.checkUsage].filter(usage => usage?.known).reduce((callSum, usage) => callSum + (usage.totalTokens ?? usage.inputTokens + usage.outputTokens), 0), 0); actions.append(document.createTextNode(`이미지 생성 ${image.generationHistory.length}회 · 확인된 텍스트 토큰 ${tokens} · 이미지 자체 사용량 확인 불가 `)); }
       if (!image.generatedPath && job.imageProvider === 'codex' && !image.pendingPath) actions.append(button(`Codex 이미지 생성: ${image.description.slice(0,20)}`, async () => { say('이미지 생성 중입니다. 호스트 응답을 기다려 주세요.', 300_000); const result = await api('/api/images/generate', { jobId: job.id, imageId: image.id }); const tokenText = result.usage?.known ? `토큰 입력 ${result.usage.inputTokens} · 출력 ${result.usage.outputTokens}` : '토큰 확인 불가'; say(`이미지 후보가 준비됐습니다. ${result.attempts}회 생성 · 자동 점검 ${result.check ? result.check.passed ? '통과' : `실패: ${result.check.reason}` : '꺼짐'} · 직접 미리 보고 확인하세요. ${tokenText} · 이미지 사용량 확인 불가`, 60_000); }));
-      if (!image.generatedPath && !image.pendingPath) actions.append(button(`직접 만든 이미지 연결: ${image.description.slice(0,20)}`, async () => { const asset = (cache.registry.assets || []).find(item => item.id === image.assetId); const { request } = await api('/api/images/request', { jobId: job.id, imageId: image.id }); const guide = request ? `Assets Manager 표준(${job.draft.standard.set})의 ImageGen 요청서입니다. ChatGPT에 아래 참조 이미지를 첨부하고 요청서를 붙여 넣어 만드세요.\n\n참조 이미지 파일:\n${request.referencePaths.join('\n')}\n\n${request.text}${asset ? `\n\n승인된 참고 자산(함께 첨부): ${asset.storedPath}` : ''}` : `호스트의 내장 이미지 기능으로 다음 장면을 만드세요: ${image.description}${asset ? `\n승인된 참고 자산: ${asset.storedPath}\n유지할 특징: ${asset.features}` : ''}`; if (request) { try { await navigator.clipboard.writeText(request.text); say('요청서를 클립보드에 복사했습니다.'); } catch {} } const filePath = prompt(`${guide}\n\n생성한 PNG/JPEG/WebP 파일의 절대 경로를 입력하세요.`); if (!filePath) return; if (!confirm('이미지를 직접 열어 내용과 시각 품질을 확인했습니까?')) return; const result = await api('/api/images/import', { jobId: job.id, imageId: image.id, path: filePath, reviewed: true }); say(`이미지를 연결했습니다. 사용량: ${result.usage.known ? '확인됨' : '확인 불가'}`); }));
+      if (!image.generatedPath && !image.pendingPath) actions.append(button(`직접 만든 이미지 연결: ${image.description.slice(0,20)}`, () => importManualImage(job, image)));
     }
     if (['awaiting_registration','due'].includes(job.status)) actions.append(button('플랫폼 예약 등록 재개', async () => { await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
     if (job.status === 'preparing' && !(account?.channel === 'naver' && job.draft.tags?.length)) actions.append(button('MCP 초안 입력', async () => { const available = cache.connectors.servers.filter(item => item.approvedFingerprint); const connectorId = prompt(`허용된 서버 ID를 선택하세요:\n${available.map(item => `${item.id}: ${item.name}`).join('\n')}`); const toolName = connectorId && prompt('초안 입력 도구 이름'); if (connectorId && toolName) { const result = await api('/api/prepare-mcp', { jobId: job.id, connectorId, toolName }); say(JSON.stringify(result.result).slice(0,300)); } }));
@@ -335,7 +386,7 @@ document.querySelector('#sample').onsubmit = async event => { event.preventDefau
 document.querySelector('#asset').onsubmit = async event => { event.preventDefault(); try { await api('/api/asset', Object.fromEntries(new FormData(event.target))); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };
 document.querySelector('#connector').onsubmit = async event => { event.preventDefault(); const input = Object.fromEntries(new FormData(event.target)); try { input.args = JSON.parse(input.args); await api('/api/connector', input); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };
 document.querySelector('#discover').onclick = async () => { try { const catalog = await api('/api/discover'); const list = document.querySelector('#record-list'); list.replaceChildren(); for (const source of catalog.sources) { const row = document.createElement('label'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'record-source'; checkbox.value = source.sourceId; row.append(checkbox, ` ${source.provider}: ${source.preview}`); list.append(row); } } catch (error) { say(error.message); } };
-document.querySelector('#job').onsubmit = async event => { event.preventDefault(); try { const form = Object.fromEntries(new FormData(event.target)); const accountIds = [...document.querySelector('#accounts').selectedOptions].map(option => option.value); const sources = []; if (form.sourceText.trim()) sources.push({ type: 'text', text: form.sourceText }); if (form.sourcePath.trim()) sources.push({ type: 'file', path: form.sourcePath }); if (form.sourceUrl.trim()) sources.push({ type: 'url', url: form.sourceUrl }); for (const selected of document.querySelectorAll('.record-source:checked')) sources.push({ type: 'ai-record', sourceId: selected.value }); if (form.connectorId) { if (!form.sourceToolName.trim()) return say('연결 문서 도구 이름을 입력하세요.'); sources.push({ type: 'connected', connectorId: form.connectorId, toolName: form.sourceToolName, args: JSON.parse(form.sourceToolArgs), ref: `${form.connectorId}:${form.sourceToolName}` }); } await api('/api/job', { accountIds, audience: form.audience, model: form.model, projectName: form.projectName, sources }); event.target.reset(); await refresh(); } catch (error) { say(error.message); } };
+document.querySelector('#job').onsubmit = submitJob;
 const projectField = document.createElement('label'); projectField.textContent = '프로젝트 표시명 (원본 경로에서 알 수 있으면 자동 적용)'; const projectInput = document.createElement('input'); projectInput.name = 'projectName'; projectInput.maxLength = 80; projectInput.placeholder = '예: PostGen'; projectField.append(projectInput); document.querySelector('#job').querySelector('[name="audience"]').closest('label').before(projectField);
 refresh().catch(error => say(error.message));
 setInterval(() => refresh().catch(error => say(error.message)), 60_000);
