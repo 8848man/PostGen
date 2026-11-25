@@ -5,7 +5,15 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
 
-const DEFAULT_SETS = { naver: 'naver-blog-post' };
+// Tistory shares the Naver blog set until the library has a Tistory set (user decision, 2026-11-25).
+// POSTGEN_ASSETS_SET_TISTORY overrides it once one exists.
+const DEFAULT_SETS = { naver: 'naver-blog-post', tistory: 'naver-blog-post' };
+const CHANNEL_LABELS = { naver: '네이버', tistory: '티스토리' };
+
+// The task line sent to the library; generation and evaluation must send the same one for the same draft.
+export function standardTask(channel, topic) {
+  return `${CHANNEL_LABELS[channel] || channel} 블로그 포스트: ${topic}`;
+}
 
 export function assetsStandardConfig(env = process.env) {
   const cli = env.POSTGEN_ASSETS_CLI ? path.resolve(env.POSTGEN_ASSETS_CLI) : null;

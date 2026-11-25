@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assetsStandardConfig, loadAssetsStandard, parseStandard, imageRequest, standardChecks, standardRecord } from '../next/assets-standard.mjs';
+import { assetsStandardConfig, loadAssetsStandard, parseStandard, imageRequest, standardChecks, standardRecord, standardTask } from '../next/assets-standard.mjs';
 import { draftPrompt, generateDraft, IMAGE_SCENE_RULE } from '../next/generate.mjs';
 import { evaluateDraft } from '../next/evaluate.mjs';
 
@@ -36,6 +36,17 @@ test('standard is off unless the library command line is configured', async () =
   assert.equal(assetsStandardConfig({}).cli, null);
   assert.equal(await loadAssetsStandard({ channel: 'naver', task: 't' }, assetsStandardConfig({})), null);
   assert.equal(assetsStandardConfig({ POSTGEN_ASSETS_CLI: 'x/cli.py' }).sets.naver, 'naver-blog-post');
+});
+
+test('Tistory shares the Naver set by default and asks the library with a Tistory task line', async () => {
+  assert.equal(assetsStandardConfig({}).sets.tistory, 'naver-blog-post');
+  assert.equal(assetsStandardConfig({ POSTGEN_ASSETS_SET_TISTORY: 'tistory-blog-post' }).sets.tistory, 'tistory-blog-post');
+  assert.equal(standardTask('tistory', '주제'), '티스토리 블로그 포스트: 주제');
+  assert.equal(standardTask('naver', '주제'), '네이버 블로그 포스트: 주제');
+  let call;
+  const standard = await loadAssetsStandard({ channel: 'tistory', task: standardTask('tistory', '주제') }, { ...assetsStandardConfig({}), cli: 'C:/lib/app/core/cli.py' }, async (python, args) => { call = args; return { code: 0, stdout: raw, stderr: '' }; });
+  assert.deepEqual(call.slice(1, 5), ['standard', '티스토리 블로그 포스트: 주제', '--set', 'naver-blog-post']);
+  assert.equal(standard.set, 'naver-blog-post');
 });
 
 test('standard is loaded with the channel set, no approval gate, as JSON; failures are not silent', async () => {
