@@ -95,3 +95,18 @@ button { background: #2061ba; color: white; border: 0; border-radius: 9px; paddi
 .login-badge.logged_in { background: #e3f4ea; color: #17663a; }
 .login-badge.logged_out { background: #fde8e6; color: #a3261b; }
 .login-badge.unknown, .login-badge.checking { background: #eef2f7; color: #4f5f75; }
+#activity-fab { position: fixed; right: 24px; bottom: 24px; z-index: 20; display: flex; align-items: center; gap: 8px; padding: 14px 20px; border-radius: 999px; box-shadow: 0 6px 18px rgba(20, 36, 59, 0.25); }
+#activity-fab.busy { background: #17663a; }
+#activity-count { min-width: 22px; padding: 2px 7px; border-radius: 999px; background: #fff; color: #17663a; font-size: 0.85em; text-align: center; }
+#activity-panel { position: fixed; right: 24px; bottom: 88px; z-index: 20; width: min(380px, calc(100vw - 48px)); max-height: min(60vh, 520px); overflow-y: auto; padding: 16px 18px; background: #fff; border: 1px solid #d6e1ee; border-radius: 14px; box-shadow: 0 10px 30px rgba(20, 36, 59, 0.2); }
+#activity-panel h2 { margin: 0 0 6px; font-size: 1.05em; }
+.activity-note { margin: 0 0 10px; color: #607087; font-size: 0.85em; }
+#activity-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.activity-item { display: grid; gap: 3px; padding: 10px 12px; border-radius: 10px; background: #f4f7fb; border-left: 4px solid #9aabc0; }
+.activity-item > div { display: flex; justify-content: space-between; gap: 8px; }
+.activity-item small { color: #4f5f75; overflow-wrap: anywhere; }
+.activity-item.running { border-left-color: #2061ba; }
+.activity-item.done { border-left-color: #17663a; }
+.activity-item.failed { border-left-color: #a3261b; }
+.activity-status { font-size: 0.85em; color: #4f5f75; white-space: nowrap; }
+.activity-empty { color: #607087; font-size: 0.9em; }
