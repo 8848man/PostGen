@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry, setPostingUrl } from '../skill/postgen/scripts/account-registry.mjs';
 import { postingUrlFor, validatePostingUrl, loginUrlFor, checkLoginStatus, openInPostingBrowser } from './posting-accounts.mjs';
+import { createActivityLog, TRACKED_ROUTES } from './activity.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
 import { republishJob, createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
@@ -30,6 +31,8 @@ const staticFiles = new Map([['/', ['index.html', 'text/html; charset=utf-8']], 
 let origin = '';
 
 function json(res, code, value) {
+  // Every handler answers through here, even after the page went away, so this closes the activity entry.
+  if (res.activityId) { activity.finish(res.activityId, code >= 400 ? value?.error || `HTTP ${code}` : null); res.activityId = null; }
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
   res.end(JSON.stringify(value));
 }
@@ -58,6 +61,19 @@ function statusState() {
 }
 function editorUrlFor(account) {
   return postingUrlFor(account);
+}
+const activity = createActivityLog();
+// What the activity panel names: the post title and, for image work, the image scene.
+function activitySubject(input) {
+  const jobId = typeof input?.jobId === 'string' ? input.jobId : null;
+  const imageId = typeof input?.imageId === 'string' ? input.imageId : null;
+  let title = null, detail = null;
+  try {
+    const job = jobId ? loadState().jobs.find(item => item.id === jobId) : null;
+    title = job?.draft?.title || job?.plan?.angle || null;
+    detail = imageId ? job?.draft?.images?.find(item => item.id === imageId)?.description?.slice(0, 80) || null : null;
+  } catch {}
+  return { jobId, imageId, title, detail };
 }
 function postingAccounts() {
   return loadRegistry().accounts.filter(account => ['naver', 'tistory'].includes(account.channel)).map(account => {
@@ -106,8 +122,10 @@ const server = http.createServer(async (req, res) => {
     if (req.headers['x-postgen-token'] !== token) return json(res, 403, { error: 'Unauthorized' });
     if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { state: statusState(), registry: loadRegistry(), connectors: loadConnectors(), settings: loadSettings(), codexModels: codexModelOptions(loadSettings().codexImageModel), postingAccounts: postingAccounts() });
     if (req.method === 'GET' && url.pathname === '/api/discover') return json(res, 200, discover(url.searchParams.get('workspace') || process.cwd(), { query: url.searchParams.get('query') || '' }));
+    if (req.method === 'GET' && url.pathname === '/api/activity') return json(res, 200, { activities: activity.list() });
     if (req.method !== 'POST' || req.headers.origin !== origin) return json(res, 404, { error: 'Not found' });
     const input = await inputJson(req);
+    if (TRACKED_ROUTES[url.pathname]) res.activityId = activity.start({ route: url.pathname, label: TRACKED_ROUTES[url.pathname], ...activitySubject(input) });
     if (url.pathname === '/api/retention/restore') return json(res, 200, { state: mutateState(current => restoreRetainedSources(current, input.jobId)) });
     if (url.pathname === '/api/account') return json(res, 200, { registry: mutateRegistry(current => addAccount(current, input)) });
     if (url.pathname === '/api/account/posting-url') {

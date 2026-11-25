@@ -23,7 +23,10 @@ const channelLabels = { naver: '네이버 블로그', tistory: '티스토리', x
 function excerpt(value, max = 140) { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; }
 function localDateTime(date) { const pad = value => String(value).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`; }
 async function api(path, data) {
-  const response = await fetch(path, { method: data ? 'POST' : 'GET', headers: { 'x-postgen-token': token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined });
+  const pending = fetch(path, { method: data ? 'POST' : 'GET', headers: { 'x-postgen-token': token, ...(data ? { 'Content-Type': 'application/json' } : {}) }, body: data ? JSON.stringify(data) : undefined });
+  // A POST may have started long work in the server; show it in the activity list right away.
+  if (data) setTimeout(() => refreshActivity(), 400);
+  const response = await pending;
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '요청에 실패했습니다');
   return result;
@@ -454,7 +457,58 @@ document.querySelector('#connector').onsubmit = async event => { event.preventDe
 document.querySelector('#discover').onclick = async () => { try { const catalog = await api('/api/discover'); const list = document.querySelector('#record-list'); list.replaceChildren(); for (const source of catalog.sources) { const row = document.createElement('label'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'record-source'; checkbox.value = source.sourceId; row.append(checkbox, ` ${source.provider}: ${source.preview}`); list.append(row); } } catch (error) { say(error.message); } };
 document.querySelector('#job').onsubmit = submitJob;
 const projectField = document.createElement('label'); projectField.textContent = '프로젝트 표시명 (원본 경로에서 알 수 있으면 자동 적용)'; const projectInput = document.createElement('input'); projectInput.name = 'projectName'; projectInput.maxLength = 80; projectInput.placeholder = '예: PostGen'; projectField.append(projectInput); document.querySelector('#job').querySelector('[name="audience"]').closest('label').before(projectField);
+// Floating activity button: long work runs in the server, so the list comes from /api/activity, not this page.
+const activityStatusLabels = { running: '진행 중', done: '완료', failed: '실패' };
+let activityOpen = false, activityTimer = null, lastRunningIds = new Set();
+function elapsedText(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분 ${seconds % 60}초`;
+}
+function activityItem(entry) {
+  const item = document.createElement('li');
+  item.className = `activity-item ${entry.status}`;
+  const head = document.createElement('div');
+  const label = document.createElement('strong');
+  label.textContent = entry.label;
+  const status = document.createElement('span');
+  status.className = 'activity-status';
+  status.textContent = entry.status === 'running' ? `${activityStatusLabels.running} · ${elapsedText(entry.elapsedMs)}` : `${activityStatusLabels[entry.status]} · ${elapsedText(entry.elapsedMs)} 걸림`;
+  head.append(label, status);
+  item.append(head);
+  for (const text of [entry.title, entry.detail, entry.error && `사유: ${entry.error}`]) {
+    if (!text) continue;
+    const line = document.createElement('small');
+    line.textContent = text;
+    item.append(line);
+  }
+  return item;
+}
+async function refreshActivity() {
+  clearTimeout(activityTimer);
+  let activities = [];
+  try { activities = (await api('/api/activity')).activities; } catch { /* the next poll retries */ }
+  const running = activities.filter(entry => entry.status === 'running');
+  const count = document.querySelector('#activity-count');
+  count.hidden = running.length === 0;
+  count.textContent = String(running.length);
+  document.querySelector('#activity-fab').classList.toggle('busy', running.length > 0);
+  const list = document.querySelector('#activity-list');
+  list.replaceChildren(...activities.map(activityItem));
+  if (!activities.length) { const empty = document.createElement('li'); empty.className = 'activity-empty'; empty.textContent = '진행 중이거나 최근 10분 안에 끝난 작업이 없습니다.'; list.append(empty); }
+  // When something finishes, reload the screen data so its result shows without a manual refresh.
+  const runningIds = new Set(running.map(entry => entry.id));
+  if ([...lastRunningIds].some(id => !runningIds.has(id))) refresh().catch(error => say(error.message));
+  lastRunningIds = runningIds;
+  activityTimer = setTimeout(refreshActivity, running.length || activityOpen ? 2000 : 10_000);
+}
+document.querySelector('#activity-fab').onclick = () => {
+  activityOpen = !activityOpen;
+  document.querySelector('#activity-panel').hidden = !activityOpen;
+  document.querySelector('#activity-fab').setAttribute('aria-expanded', String(activityOpen));
+  refreshActivity();
+};
 refresh().then(checkPostingLogins).catch(error => say(error.message));
+refreshActivity();
 document.querySelector('#login-recheck').onclick = () => checkPostingLogins();
 // After logging in from a badge the user comes back to this tab; re-check then, at most every 15 seconds.
 window.addEventListener('focus', () => { if (Date.now() - loginCheckedAt > 15_000) checkPostingLogins(); });
