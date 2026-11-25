@@ -4,7 +4,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry } from '../skill/postgen/scripts/account-registry.mjs';
+import { loadRegistry, resolveAccount, addAccount, addSample, approveSample, setDefaultSample, addAsset, saveRegistry, setPostingUrl } from '../skill/postgen/scripts/account-registry.mjs';
+import { postingUrlFor, validatePostingUrl, loginUrlFor, checkLoginStatus, openInPostingBrowser } from './posting-accounts.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
 import { republishJob, createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
@@ -56,10 +57,13 @@ function statusState() {
   return pruned;
 }
 function editorUrlFor(account) {
-  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(account.handle)) throw new Error('Use the blog ID as the account handle');
-  if (account.channel === 'naver') return `https://blog.naver.com/${account.handle}?Redirect=Write&`;
-  if (account.channel === 'tistory') return `https://${account.handle}.tistory.com/manage/newpost`;
-  throw new Error('No native browser editor for this channel');
+  return postingUrlFor(account);
+}
+function postingAccounts() {
+  return loadRegistry().accounts.filter(account => ['naver', 'tistory'].includes(account.channel)).map(account => {
+    try { return { accountId: account.id, postingUrl: postingUrlFor(account), custom: Boolean(account.postingUrl) }; }
+    catch (error) { return { accountId: account.id, postingUrl: null, custom: false, error: error.message }; }
+  });
 }
 // Keep the failed step and reason on the job; the on-screen message disappears after a few seconds.
 async function withAutomationRecord(jobId, step, action) {
@@ -100,12 +104,27 @@ const server = http.createServer(async (req, res) => {
       res.end(fs.readFileSync(path.join(webRoot, file))); return;
     }
     if (req.headers['x-postgen-token'] !== token) return json(res, 403, { error: 'Unauthorized' });
-    if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { state: statusState(), registry: loadRegistry(), connectors: loadConnectors(), settings: loadSettings(), codexModels: codexModelOptions(loadSettings().codexImageModel) });
+    if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { state: statusState(), registry: loadRegistry(), connectors: loadConnectors(), settings: loadSettings(), codexModels: codexModelOptions(loadSettings().codexImageModel), postingAccounts: postingAccounts() });
     if (req.method === 'GET' && url.pathname === '/api/discover') return json(res, 200, discover(url.searchParams.get('workspace') || process.cwd(), { query: url.searchParams.get('query') || '' }));
     if (req.method !== 'POST' || req.headers.origin !== origin) return json(res, 404, { error: 'Not found' });
     const input = await inputJson(req);
     if (url.pathname === '/api/retention/restore') return json(res, 200, { state: mutateState(current => restoreRetainedSources(current, input.jobId)) });
     if (url.pathname === '/api/account') return json(res, 200, { registry: mutateRegistry(current => addAccount(current, input)) });
+    if (url.pathname === '/api/account/posting-url') {
+      const account = loadRegistry().accounts.find(item => item.id === input.accountId);
+      if (!account) throw new Error('Unknown account');
+      const postingUrl = String(input.postingUrl || '').trim() ? validatePostingUrl(account, input.postingUrl) : null;
+      return json(res, 200, { registry: mutateRegistry(current => setPostingUrl(current, account.id, postingUrl)), postingAccounts: postingAccounts() });
+    }
+    if (url.pathname === '/api/login-status') return json(res, 200, { statuses: await checkLoginStatus(loadRegistry().accounts) });
+    if (url.pathname === '/api/login-open') {
+      const account = loadRegistry().accounts.find(item => item.id === input.accountId);
+      if (!account) throw new Error('Unknown account');
+      // Logged in: open the posting page itself. Otherwise the login page, which returns to the posting page.
+      const target = input.loggedIn ? postingUrlFor(account) : loginUrlFor(account);
+      try { return json(res, 200, { ...(await openInPostingBrowser(target)), url: target }); }
+      catch (error) { return json(res, 200, { opened: false, url: target, reason: error.message }); }
+    }
     if (url.pathname === '/api/settings') return json(res, 200, { settings: updateSettings(input) });
     if (url.pathname === '/api/connector') return json(res, 200, { connectors: registerConnector(input) });
     if (url.pathname === '/api/connector/inspect') return json(res, 200, await inspectConnector(input.id));

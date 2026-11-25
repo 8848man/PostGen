@@ -18,7 +18,7 @@ export function validateRegistry(registry) {
   if (!registry || registry.schemaVersion !== 'account-registry/v1' || !Number.isInteger(registry.revision) || registry.revision < 0 || !Array.isArray(registry.accounts) || !Array.isArray(registry.samples) || (registry.assets !== undefined && !Array.isArray(registry.assets))) throw new Error('Invalid account registry');
   const accountIds = new Set();
   for (const account of registry.accounts) {
-    if (account.schemaVersion !== 'account-profile/v1' || !validId(account.id) || accountIds.has(account.id) || !Number.isInteger(account.revision) || account.revision < 0 || !nonempty(account.createdAt, 40) || !nonempty(account.updatedAt, 40) || !nonempty(account.channel, 100) || !nonempty(account.handle, 200) || !nonempty(account.defaultGoal) || !(account.defaultSampleId === null || validId(account.defaultSampleId))) throw new Error('Invalid account');
+    if (account.schemaVersion !== 'account-profile/v1' || !validId(account.id) || accountIds.has(account.id) || !Number.isInteger(account.revision) || account.revision < 0 || !nonempty(account.createdAt, 40) || !nonempty(account.updatedAt, 40) || !nonempty(account.channel, 100) || !nonempty(account.handle, 200) || !nonempty(account.defaultGoal) || !(account.defaultSampleId === null || validId(account.defaultSampleId)) || !(account.postingUrl === undefined || account.postingUrl === null || (nonempty(account.postingUrl, 2048) && account.postingUrl.startsWith('https://')))) throw new Error('Invalid account');
     accountIds.add(account.id);
   }
   const assetIds = new Set();
@@ -74,6 +74,17 @@ export function addAccount(current, { channel, handle, defaultGoal }) {
   if (!CHANNELS.has(channel) && !channel.startsWith('mcp:')) throw new Error('Unsupported channel');
   if (current.accounts.some(account => account.channel === channel && account.handle === handle)) throw new Error('Account already exists');
   return advance(current, next => { const now = new Date().toISOString(); next.accounts.push({ schemaVersion: 'account-profile/v1', id: crypto.randomUUID(), revision: 0, createdAt: now, updatedAt: now, channel, handle, defaultGoal, defaultSampleId: null }); });
+}
+
+// The account's posting (editor) address; null returns to the channel default. Channel rules are checked by the caller.
+export function setPostingUrl(current, accountId, postingUrl) {
+  if (!current.accounts.some(account => account.id === accountId)) throw new Error('Unknown account');
+  return advance(current, next => {
+    const account = next.accounts.find(item => item.id === accountId);
+    account.postingUrl = postingUrl || null;
+    account.revision += 1;
+    account.updatedAt = new Date().toISOString();
+  });
 }
 
 export function addSample(current, { accountId, sourceType, sourceRef, rights, rules = [] }) {
