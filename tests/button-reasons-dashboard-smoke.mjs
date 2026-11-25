@@ -62,7 +62,7 @@ try {
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs.find(job => job.id === ids[0]).status, 'draft');
   await publish.click();
   await warning.getByRole('button', { name: '발행' }).click();
-  await page.getByRole('status').getByText('로그인 후 재개', { exact: false }).waitFor();
+  await page.locator('#message').filter({ hasText: '로그인 후 재개' }).waitFor();
   const forced = JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs.find(job => job.id === ids[0]);
   assert.equal(forced.status, 'awaiting_registration');
   assert.equal(forced.approval.standardUnverifiedAcknowledged, true);
@@ -81,7 +81,6 @@ try {
   assert.equal(regenerationRequests, 0);
   let releasePublish;
   await page.route('**/api/publish-reservation', route => { releasePublish = () => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }); });
-  await page.getByLabel('공개 시각').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
   const busyPublish = page.getByRole('button', { name: '발행', exact: true });
   const pendingRequest = page.waitForRequest(request => request.url().endsWith('/api/publish-reservation'));
   await busyPublish.click();

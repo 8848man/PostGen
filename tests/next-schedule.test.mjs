@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { seoulScheduleParts, reservationReceiptMatches, naverReservationListCount, tistoryReservationEntries, stage, firstLineDifference } from '../next/browser-adapter.mjs';
+import { seoulScheduleParts, reservationReceiptMatches, naverReservationListCount, tistoryReservationEntries, tistoryRecheckResult, stage, firstLineDifference } from '../next/browser-adapter.mjs';
 
 test('automation stage brings the editor to front and tags failures with the step name', async () => {
   const calls = [];
@@ -42,6 +42,11 @@ test('Tistory post list matches a reserved entry by exact title and Seoul time',
   assert.equal(tistoryReservationEntries([{ ...reserved, status: '' }], title, at).length, 0);
   assert.equal(tistoryReservationEntries([{ ...reserved, times: ['2026-12-02 22:40'] }], title, at).length, 0);
   assert.equal(tistoryReservationEntries([{ ...reserved, title: `${title} 2` }], title, at).length, 0);
+  const job = { accountHandle: 'lattatui', draft: { title }, schedule: { at } };
+  assert.equal(tistoryRecheckResult([], job).verified, false);
+  assert.equal(tistoryRecheckResult([reserved], job).reservationUrl, reserved.url);
+  assert.equal(tistoryRecheckResult([reserved, reserved], job).verified, false);
+  assert.equal(tistoryRecheckResult([{ ...reserved, url: 'https://other.tistory.com/17' }], job).verified, false);
 });
 
 test('Naver reservation list matches title and time within the same entry', () => {

@@ -63,9 +63,8 @@ try {
   assert.equal(revisionRequest.instructions, '인물의 자세를 바꿔 주세요');
   await page.route('**/api/start', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
   await page.route('**/api/prepare-browser', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessionId: 'test', loginRequired: true, message: 'Test browser handoff' }) }));
-  await page.getByLabel('공개 시각').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
   await page.getByRole('button', { name: '발행', exact: true }).click();
-  await page.locator('#message').getByText('로그인 후 재개', { exact: false }).waitFor();
+  await page.locator('#message').filter({ hasText: '로그인 후 재개' }).waitFor();
   const published = JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8'));
   assert.equal(published.jobs[0].draft.images[0].generatedPath, candidate);
   assert.equal(published.jobs[0].draft.images[0].afterParagraph, 2);

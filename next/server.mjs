@@ -20,7 +20,7 @@ import { importAsset, importGeneratedImage, previewGeneratedImage, discardGenera
 import { runImageAttempts } from './host-image-flow.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
 import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp, tagsNeedBrowser } from './mcp-client.mjs';
-import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckNaverReservation } from './browser-adapter.mjs';
+import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckPlatformReservation } from './browser-adapter.mjs';
 import { loadSettings, updateSettings } from './settings.mjs';
 import { codexModelOptions } from './codex-models.mjs';
 
@@ -346,7 +346,7 @@ const server = http.createServer(async (req, res) => {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const account = loadRegistry().accounts.find(item => item.id === job?.accountId);
       if (job?.status !== 'unknown' || !account) throw new Error('Only an uncertain reservation can be re-checked');
-      const result = await recheckNaverReservation({ ...job, channel: account.channel });
+      const result = await recheckPlatformReservation({ ...job, channel: account.channel });
       return json(res, 200, { result, state: result.verified ? mutateState(current => confirmUnknownSchedule(current, job.id, result)) : loadState() });
     }
     if (url.pathname === '/api/registration/mcp') {

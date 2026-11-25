@@ -20,7 +20,11 @@ test('installed Skill CLI and local UI core use the same account drafts', () => 
     const registry = addAccount(emptyRegistry(), { channel: 'naver', handle: 'account', defaultGoal: 'explain' });
     saveRegistry(registry, 0);
     const [created] = cli(['create'], JSON.stringify({ accountIds: [registry.accounts[0].id], audience: 'reader', sources: [{ id: 's1', type: 'text', ref: 'user', text: 'source fact' }] }));
-    cli(['draft', created.id], JSON.stringify({ title: 'Shared title', body: 'Shared body', claims: [], images: [] }));
+    const draftResult = spawnSync(process.execPath, [path.resolve('skill/postgen/scripts/next-cli.mjs'), 'draft', created.id], {
+      env, input: JSON.stringify({ title: 'Shared title', body: 'Shared body', claims: [], images: [] }), encoding: 'utf8'
+    });
+    assert.equal(draftResult.status, 0, draftResult.stderr);
+    assert.match(draftResult.stderr, /no image scene suggestions/);
     assert.equal(loadState().jobs[0].draft.title, 'Shared title');
     assert.equal(cli(['show', created.id]).draft.body, 'Shared body');
   } finally {
