@@ -15,7 +15,9 @@ try {
   const tistory = await configurePlatformReservation(page, 'tistory', at.toISOString());
   if (tistory.localDate !== isoDate || await page.locator('#publish-btn').evaluate(element => element.dataset.clicked === 'yes')) throw new Error('Tistory dry run failed');
   // Tistory tags: entered as chips in the tag box under the editor, then read back exactly.
-  const tistoryTagBox = chips => `<div class="tag-box">${chips.map(chip => `<span>#${chip}</span>`).join('')}<input id="tagText" placeholder="#태그입력" onkeydown="if(event.key==='Enter'){const chip=document.createElement('span');chip.textContent='#'+this.value;this.before(chip);this.value=''}"></div>`;
+  // Mirrors the real editor (2026-11-25): chips with a delete link, and a hidden sizing div holding the placeholder.
+  const tistoryChip = chip => `<span class="txt_tag"><a href="#" aria-label="${chip} 태그 수정">#${chip}</a><a href="#" class="btn_delete"><span>${chip} 태그 삭제</span></a></span>`;
+  const tistoryTagBox = chips => `<script>function addChip(input) { const chip = document.createElement('span'); chip.className = 'txt_tag'; chip.innerHTML = '<a href="#">#' + input.value + '</a><a href="#" class="btn_delete"><span>' + input.value + ' 태그 삭제</span></a>'; input.closest('.inp_tag').before(chip); input.value = ''; }</script><div class="editor_tag">${chips.map(tistoryChip).join('')}<span class="inp_tag"><span>#</span><div style="display:inline-block"><input type="text" title="태그" id="tagText" placeholder="태그입력" onkeydown="if(event.key==='Enter')addChip(this)"><div style="visibility:hidden;height:0">태그입력</div></div></span></div>`;
   await page.setContent(tistoryTagBox([]) + tistoryLayer);
   await configurePlatformReservation(page, 'tistory', at.toISOString(), ['PostGen', '글검토']);
   assert.deepEqual(await verifyTistoryTags(page, ['PostGen', '글검토']), ['PostGen', '글검토']);
@@ -24,8 +26,10 @@ try {
   await assert.rejects(configurePlatformReservation(page, 'tistory', at.toISOString(), ['PostGen']), /Tistory tags differ from approved draft/);
   await page.setContent(tistoryLayer);
   await assert.rejects(configurePlatformReservation(page, 'tistory', at.toISOString(), ['PostGen']), /Tistory tag field is unavailable/);
-  await page.setContent(`<div class="tag-box"><input id="tagText" placeholder="#태그입력" onkeydown="if(event.key==='Enter')this.value=''"></div>${tistoryLayer}`);
+  await page.setContent(`<div class="editor_tag"><span class="inp_tag"><input id="tagText" placeholder="태그입력" onkeydown="if(event.key==='Enter')this.value=''"><div style="visibility:hidden;height:0">태그입력</div></span></div>${tistoryLayer}`);
   await assert.rejects(configurePlatformReservation(page, 'tistory', at.toISOString(), ['PostGen']), /Tistory tag was not confirmed: PostGen/);
+  await page.setContent(`<div class="tag-box"><input id="tagText" placeholder="태그입력"></div>${tistoryLayer}`);
+  await assert.rejects(configurePlatformReservation(page, 'tistory', at.toISOString(), ['PostGen']), /Tistory tag box layout is unknown/);
   const frame = `<button onclick="document.querySelector('#layer').hidden=false">발행</button><div id="layer" hidden><input id="open_public" type="radio"><input id="radio_time2" type="radio"><input class="input_date__UwKAB" readonly value="${naverDate}" onclick="document.querySelector('#calendar').hidden=false"><div id="calendar" hidden><button>다음 달</button><button onclick="document.querySelector('#calendar').hidden=true">${target.day}</button></div><select title="예약 발행 시간 선택">${Array.from({length:24},(_,i)=>`<option>${String(i).padStart(2,'0')}</option>`).join('')}</select><select title="예약 발행 분 선택">${[0,10,20,30,40,50].map(i=>`<option>${String(i).padStart(2,'0')}</option>`).join('')}</select><button>발행</button></div>`;
   await page.setContent(`<iframe id="mainFrame"></iframe>`);
   const taggedFrame = frame.replace('<input id="open_public"', `<div class="tag_editor"><input aria-label="태그 입력" hidden onkeydown="if(event.key==='Enter'){const chip=document.createElement('span');chip.textContent=this.value;this.before(chip);this.value=''}"></div><input id="open_public" onchange="document.querySelector('.tag_editor input').hidden=false"`).replace('<input id="radio_time2"', '<label for="radio_time2">예약</label><input id="radio_time2"');

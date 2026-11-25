@@ -502,16 +502,13 @@ async function tistoryTagInput(page, { required }) {
   return null;
 }
 
+// Real layout (checked 2026-11-25): .editor_tag > span.txt_tag > a "#태그" + a.btn_delete "태그 삭제", then
+// span.inp_tag with the input and hidden sizing divs (one holds the placeholder text). Only the chip links count.
 async function tistoryTagItems(input) {
   return input.evaluate(element => {
-    const box = element.parentElement?.closest('[class*="tag"], [id*="tag"]') || element.parentElement;
-    const values = new Set();
-    const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
-    while (walker.nextNode()) {
-      const value = walker.currentNode.nodeValue.trim().replace(/^#/, '');
-      if (value) values.add(value);
-    }
-    return [...values];
+    const box = element.closest('.editor_tag');
+    if (!box) throw new Error('Tistory tag box layout is unknown; check the editor');
+    return [...box.querySelectorAll('.txt_tag')].map(chip => (chip.querySelector('a:not(.btn_delete)')?.textContent || '').trim().replace(/^#/, '')).filter(Boolean);
   });
 }
 
