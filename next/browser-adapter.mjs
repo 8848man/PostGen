@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { chromium } from 'playwright-core';
 import { dataDir } from '../skill/postgen/scripts/profile.mjs';
+import { bodyBlocks, blockDifference, headingOccurrence, tistoryHtml } from '../skill/postgen/scripts/body-structure.mjs';
 
 const sessions = new Map();
 let attachedEdge = null;
@@ -119,20 +120,17 @@ export async function fillNativeEditorPage(page, job) {
       const existingBody = (await page.frameLocator('#editor-tistory_ifr').locator('#tinymce').innerText()).trim();
       if (existingTitle || existingBody) throw new Error('Tistory editor contains an existing draft; open a blank editor before automatic input');
     });
+    const headings = job.draft.headings || [];
     const { title, body } = await stage('제목·본문 입력', page, async () => {
       await page.locator('#post-title-inp').fill(job.draft.title);
-      const bodyArea = page.frameLocator('#editor-tistory_ifr').locator('#tinymce');
-      const lines = job.draft.body.replace(/\r\n/g, '\n').split('\n');
-      await bodyArea.fill(lines[0]);
-      for (const line of lines.slice(1)) { await page.keyboard.press('Enter'); if (line) await page.keyboard.insertText(line); }
+      await enterTistoryHtml(page, tistoryHtml(job.draft.body, headings));
       const title = await page.locator('#post-title-inp').inputValue();
-      const body = await readTistoryBody(page);
-      if (title.trim() !== job.draft.title.trim() || body.trim() !== job.draft.body.trim()) throw new Error('Tistory editor readback differs');
-      return { title, body };
+      if (title.trim() !== job.draft.title.trim()) throw new Error('Tistory editor title readback differs');
+      return { title, body: await verifyTistoryBody(page, job.draft.body, headings) };
     });
     const uploadedImages = await stage('이미지 업로드', page, async () => {
-      const uploaded = await uploadTistoryImages(page, job.draft.images);
-      if (await readTistoryBody(page) !== body) throw new Error('Tistory body changed during image upload');
+      const uploaded = await uploadTistoryImages(page, job.draft.images, bodyBlocks(job.draft.body, headings));
+      await verifyTistoryBody(page, job.draft.body, headings);
       return uploaded;
     });
     return { editorUrl: page.url(), visibleAccount: job.accountHandle, title, body, uploadedImages, verification: 'browser-readback' };
@@ -179,7 +177,7 @@ export async function fillNativeEditorPage(page, job) {
         if (line) await page.keyboard.insertText(line);
       }
     });
-    if (job.draft.headings?.length) await stage('소제목 서식', page, () => formatNaverHeadings(page, job.draft.headings));
+    if (job.draft.headings?.length) await stage('소제목 서식', page, () => formatNaverHeadings(page, job.draft.headings, job.draft.body));
     const { title, body } = await stage('입력 내용 확인', page, async () => {
       const title = await readNaverTitle(page);
       const body = await readNaverBody(page);
@@ -193,14 +191,53 @@ export async function fillNativeEditorPage(page, job) {
       if (naverTextLines(afterUpload) !== naverTextLines(body)) throw new Error('Naver text changed during image upload');
       return uploaded;
     });
-    if (job.draft.headings?.length) await stage('소제목 최종 확인', page, () => verifyNaverHeadings(page, job.draft.headings));
+    if (job.draft.headings?.length) await stage('소제목 최종 확인', page, () => verifyNaverHeadings(page, job.draft.headings, job.draft.body));
     return { editorUrl: frameInfo.url(), visibleAccount: job.accountHandle, title, body, uploadedImages, verification: 'browser-readback' };
   }
   throw new Error('Native channel editor adapter unavailable');
 }
 
-async function readTistoryBody(page) {
-  return (await page.frameLocator('#editor-tistory_ifr').locator('#tinymce > p').allInnerTexts()).map(text => text.replace(/\u00a0/g, ' ')).join('\n').trim();
+// Text blocks of the Tistory editor in document order: paragraphs, headings and list items.
+// Image-only paragraphs and figures carry no text and are not blocks.
+const TISTORY_BLOCKS = ':scope > p, :scope > h2, :scope > h3, :scope > h4, :scope > ul > li, :scope > ol > li';
+export async function readTistoryBlocks(page) {
+  return page.frameLocator('#editor-tistory_ifr').locator('#tinymce').evaluate((root, selector) => {
+    const clean = text => text.replace(/\u00a0/g, ' ').trim();
+    return [...root.querySelectorAll(selector)].map(node => {
+      const walker = node.ownerDocument.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      let bold = '';
+      while (walker.nextNode()) if (walker.currentNode.parentElement.closest('b, strong') && node.contains(walker.currentNode.parentElement.closest('b, strong'))) bold += walker.currentNode.textContent;
+      const colored = [...node.querySelectorAll('[style]')].some(element => element.style.color) || Boolean(node.querySelector('font[color]'));
+      return { tag: node.tagName.toLowerCase(), text: clean(node.textContent), bold: clean(bold), colored };
+    }).filter(block => block.text);
+  }, TISTORY_BLOCKS);
+}
+// The Tistory editor is TinyMCE; its HTML input keeps the headings, lists and emphasis that typing cannot.
+async function enterTistoryHtml(page, html) {
+  const entered = await page.evaluate(content => {
+    const editor = window.tinymce?.get?.('editor-tistory') || window.tinymce?.activeEditor;
+    if (!editor || typeof editor.setContent !== 'function') return false;
+    editor.setContent(content);
+    editor.undoManager?.add?.();
+    editor.nodeChanged?.();
+    editor.fire?.('change');
+    return true;
+  }, html);
+  if (!entered) throw new Error('Tistory HTML input is unavailable (editor API not found); check the editor');
+}
+function expectedTistoryBlocks(body, headings) {
+  return bodyBlocks(body, headings).map(({ tag, text, bold, colored }) => ({ tag, text, bold: bold.trim(), colored }));
+}
+async function verifyTistoryBody(page, body, headings) {
+  const difference = blockDifference(await readTistoryBlocks(page), expectedTistoryBlocks(body, headings));
+  if (difference) throw new Error(`Tistory editor body differs from approved draft (${difference})`);
+  return body.trim();
+}
+// Returns the approved body when the editor holds exactly its formatted blocks, otherwise the editor text.
+async function readTistoryBody(page, approvedBody = null, headings = []) {
+  const actual = await readTistoryBlocks(page);
+  if (approvedBody && !blockDifference(actual, expectedTistoryBlocks(approvedBody, headings))) return approvedBody.trim();
+  return actual.map(block => block.text).join('\n');
 }
 
 async function naverParagraphTexts(page, selector) {
@@ -227,17 +264,19 @@ async function selectNaverParagraph(paragraph, endOnly = false) {
     selection.addRange(range);
   }, endOnly);
 }
-async function exactNaverBodyParagraph(page, heading) {
+// A table of contents repeats heading text, so pick the occurrence the approved body marks as the heading.
+async function exactNaverBodyParagraph(page, heading, body, headings) {
   const selector = '.se-component[data-a11y-title="본문"] .se-text-paragraph';
   const texts = await naverParagraphTexts(page, selector);
   const matches = texts.flatMap((text, index) => text.trim() === heading ? [index] : []);
-  if (matches.length !== 1) throw new Error(`Naver heading missing or ambiguous: ${heading} (matches=${matches.length}, paragraphs=${texts.length})`);
-  return page.frameLocator('iframe#mainFrame').locator(selector).nth(matches[0]);
+  const occurrence = body ? headingOccurrence(body, headings, heading) : { index: 0, total: 1 };
+  if (!occurrence || matches.length !== occurrence.total) throw new Error(`Naver heading missing or ambiguous: ${heading} (matches=${matches.length}, paragraphs=${texts.length})`);
+  return page.frameLocator('iframe#mainFrame').locator(selector).nth(matches[occurrence.index]);
 }
-async function verifyNaverHeadings(page, headings) {
+async function verifyNaverHeadings(page, headings, body = null) {
   const frame = page.frameLocator('iframe#mainFrame');
   for (const heading of headings) {
-    const paragraph = await exactNaverBodyParagraph(page, heading);
+    const paragraph = await exactNaverBodyParagraph(page, heading, body, headings);
     await selectNaverParagraph(paragraph);
     // The toolbar label updates a moment after selection (slower right after an image upload); poll before judging.
     const sizeButton = frame.locator('.se-property-toolbar-label-select-button.se-font-size-code-toolbar-button');
@@ -260,11 +299,11 @@ async function verifyNaverHeadings(page, headings) {
     if (!sizeLabel.startsWith('24') || !styles.length || styles.some(style => style.weight < 600)) throw new Error(`Naver heading is not size 24 bold: ${heading}`);
   }
 }
-async function formatNaverHeadings(page, headings) {
+async function formatNaverHeadings(page, headings, body = null) {
   const frame = page.frameLocator('iframe#mainFrame');
   for (const heading of headings) {
     await focusEditor(page);
-    const paragraph = await exactNaverBodyParagraph(page, heading);
+    const paragraph = await exactNaverBodyParagraph(page, heading, body, headings);
     // SmartEditor ignores DOM ranges set by script; select with the keyboard so the editor registers it.
     await paragraph.click();
     await page.keyboard.press('End');
@@ -275,7 +314,7 @@ async function formatNaverHeadings(page, headings) {
     await size.click();
     await page.keyboard.press('Control+b');
   }
-  await verifyNaverHeadings(page, headings);
+  await verifyNaverHeadings(page, headings, body);
 }
 
 export async function uploadNaverImages(page, images) {
@@ -323,12 +362,15 @@ export async function uploadNaverImages(page, images) {
   return uploaded;
 }
 
-export async function uploadTistoryImages(page, images) {
+// afterParagraph N counts text blocks (paragraphs, headings, list items), one per non-empty body line.
+export async function uploadTistoryImages(page, images, expectedBlocks = null) {
   const frame = page.frameLocator('#editor-tistory_ifr');
+  const blockSelector = TISTORY_BLOCKS.replaceAll(':scope', '#tinymce');
   const uploaded = [];
   for (const image of images.slice().sort((a,b) => a.afterParagraph - b.afterParagraph)) {
     if (!image.generatedPath || !fs.existsSync(image.generatedPath) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1) throw new Error('Approved image file and paragraph position required');
-    const paragraphs = frame.locator('#tinymce > p').filter({ hasText: /\S/ });
+    if (expectedBlocks?.[image.afterParagraph - 1]?.tag === 'li') throw new Error(`Tistory image ${image.id} would go inside a list; move it after a paragraph or subheading`);
+    const paragraphs = frame.locator(blockSelector).filter({ hasText: /\S/ });
     if (await paragraphs.count() < image.afterParagraph) throw new Error('Tistory target paragraph unavailable');
     const before = new Set(await frame.locator('#tinymce img').evaluateAll(elements => elements.map(element => element.getAttribute('src'))));
     await paragraphs.nth(image.afterParagraph - 1).click();
@@ -346,10 +388,10 @@ export async function uploadTistoryImages(page, images) {
     if (newSources.length !== 1) throw new Error('Tistory image upload could not be verified');
     const position = await frame.locator('#tinymce img').evaluateAll((elements, args) => {
       const imageNode = elements.find(element => element.getAttribute('src') === args.source);
-      const paragraphs = [...document.querySelectorAll('#tinymce > p')].filter(element => element.textContent.trim());
+      const paragraphs = [...document.querySelectorAll(args.blockSelector)].filter(element => element.textContent.trim());
       const before = paragraphs[args.afterParagraph - 1], after = paragraphs[args.afterParagraph];
       return !!imageNode && !!before && Boolean(before.compareDocumentPosition(imageNode) & Node.DOCUMENT_POSITION_FOLLOWING) && (!after || Boolean(imageNode.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING));
-    }, { source: newSources[0], afterParagraph: image.afterParagraph });
+    }, { source: newSources[0], afterParagraph: image.afterParagraph, blockSelector });
     if (!position) throw new Error('Tistory image is outside its approved paragraph position');
     uploaded.push(image.id);
   }
@@ -384,7 +426,7 @@ export async function openEditor(job, editorUrl, mapping = null) {
     if (!allowed(new URL(page.url()).hostname)) return { sessionId, loginRequired: true, message: loginMessage };
     const editor = mapping ? await fillEditorPage(page, mapping, job) : await fillNativeEditorPage(page, job);
     if (!mapping && job.draft.images.length) sessions.get(sessionId).imageSources = await nativeImageSources(page, job.channel);
-    if (!mapping && job.channel === 'naver') { sessions.get(sessionId).approvedBody = job.draft.body; sessions.get(sessionId).approvedHeadings = job.draft.headings || []; }
+    if (!mapping) { sessions.get(sessionId).approvedBody = job.draft.body; sessions.get(sessionId).approvedHeadings = job.draft.headings || []; }
     return { sessionId, editor };
   } catch (error) { if (sessionId) sessions.delete(sessionId); if (!attached) await context.close(); throw error; }
 }
@@ -397,7 +439,7 @@ export async function resumeEditorSession(sessionId, job) {
   if (job.channel === 'naver' && !(await waitForNaverEditor(session.page, job.accountHandle))) throw new Error('Naver editor did not open for the approved account');
   const editor = session.mapping ? await fillEditorPage(session.page, session.mapping, job) : await fillNativeEditorPage(session.page, job);
   if (!session.mapping && job.draft.images.length) session.imageSources = await nativeImageSources(session.page, job.channel);
-  if (!session.mapping && job.channel === 'naver') { session.approvedBody = job.draft.body; session.approvedHeadings = job.draft.headings || []; }
+  if (!session.mapping) { session.approvedBody = job.draft.body; session.approvedHeadings = job.draft.headings || []; }
   return { sessionId, editor };
 }
 
@@ -410,9 +452,9 @@ export async function readEditorSession(sessionId) {
   const session = sessions.get(sessionId);
   if (!session) throw new Error('Unknown editor session');
   if (!session.mapping) {
-    if (session.channel === 'tistory') return { editorUrl: session.page.url(), title: await session.page.locator('#post-title-inp').inputValue(), body: await readTistoryBody(session.page) };
+    if (session.channel === 'tistory') return { editorUrl: session.page.url(), title: await session.page.locator('#post-title-inp').inputValue(), body: await readTistoryBody(session.page, session.approvedBody, session.approvedHeadings) };
     const actual = await readNaverBody(session.page);
-    if (session.approvedHeadings?.length) await verifyNaverHeadings(session.page, session.approvedHeadings);
+    if (session.approvedHeadings?.length) await verifyNaverHeadings(session.page, session.approvedHeadings, session.approvedBody);
     const body = session.approvedBody && naverTextLines(actual) === naverTextLines(session.approvedBody) ? session.approvedBody : actual;
     return { editorUrl: session.page.frames().find(item => item.name() === 'mainFrame')?.url(), title: await readNaverTitle(session.page), body };
   }

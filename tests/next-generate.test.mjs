@@ -26,4 +26,14 @@ test('Naver draft prompt asks for single-word tags', async () => {
   let prompt = '';
   await generateDraft(input, {}, async text => { prompt = text; return { result: { title: '제목', tags: [], body: '본문', headings: [], claims: [], images: [], diagnostics: [] } }; });
   assert.match(prompt, /single word with no spaces/);
+  assert.doesNotMatch(prompt, /Tistory formatting/);
+});
+
+test('headings repeated by the table of contents are kept and Tistory prompt explains the formatting', async () => {
+  let prompt = '';
+  const body = '도입\n\n목차\n1. 첫째\n2. 둘째\n\n1. 첫째\n본문\n2. 둘째\n본문';
+  const result = await generateDraft({ ...input, account: { channel: 'tistory', handle: 'me' } }, {}, async text => { prompt = text; return { result: { title: '제목', tags: [], body, headings: ['1. 첫째', '2. 둘째', '1. 첫째'], claims: [], images: [], diagnostics: [] } }; });
+  assert.deepEqual(result.draft.headings, ['1. 첫째', '2. 둘째']);
+  assert.ok(!result.diagnostics.some(item => item.code === 'heading_mismatch'));
+  assert.match(prompt, /Tistory formatting is applied/);
 });
