@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import { loadState, saveState, createCampaign, setCampaignPlan, setDraft, approveDraft, scheduleJob } from './next-core.mjs';
+import { loadState, saveState, createCampaign, addCampaignAccounts, setCampaignPlan, setDraft, approveDraft, scheduleJob } from './next-core.mjs';
 import { loadRegistry } from './account-registry.mjs';
 
 function input() {
@@ -19,14 +19,18 @@ function job(state, id) {
   if (!found) throw new Error('Unknown job');
   return found;
 }
+const vaultSources = sources => Array.isArray(sources) && sources.length > 0 && sources.every(source => typeof source.ref === 'string' && source.ref.startsWith('posts/'));
+const campaignJobs = (state, id) => state.jobs.filter(item => item.campaignId === job(state, id).campaignId);
 function run(args) {
   const [command, id] = args;
   if (command === 'list') return loadState().jobs.map(item => ({ id: item.id, campaignId: item.campaignId, accountId: item.accountId, accountHandle: item.accountHandle, status: item.status, title: item.draft?.title || null, revision: item.draft?.revision || 0 }));
   if (command === 'show') return job(loadState(), id);
   if (command === 'create') {
     const spec = input(), registry = loadRegistry();
-    if (!Array.isArray(spec.accountIds) || !spec.accountIds.length) throw new Error('Select account IDs');
-    const accounts = spec.accountIds.map(accountId => registry.accounts.find(item => item.id === accountId));
+    if (spec.allRegisteredAccounts && (!vaultSources(spec.sources) || spec.accountIds !== undefined)) throw new Error('All registered accounts require vault post sources and no accountIds');
+    const ids = spec.allRegisteredAccounts ? registry.accounts.map(account => account.id) : spec.accountIds;
+    if (!Array.isArray(ids) || !ids.length) throw new Error('Select account IDs');
+    const accounts = ids.map(accountId => registry.accounts.find(item => item.id === accountId));
     if (accounts.some(account => !account)) throw new Error('Unknown account');
     let created = [];
     update(current => {
@@ -35,6 +39,19 @@ function run(args) {
       return next;
     });
     return created;
+  }
+  if (command === 'complete-accounts') {
+    const registry = loadRegistry(), current = loadState(), siblings = campaignJobs(current, id);
+    if (!vaultSources(siblings[0].sources)) throw new Error('Only vault post campaigns can add all registered accounts');
+    const existing = new Set(siblings.map(item => item.accountId));
+    const missing = registry.accounts.filter(account => !existing.has(account.id));
+    if (!missing.length) return [];
+    const next = update(state => addCampaignAccounts(state, siblings[0].campaignId, missing.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal }))));
+    return next.jobs.filter(item => item.campaignId === siblings[0].campaignId && !existing.has(item.accountId)).map(item => ({ id: item.id, campaignId: item.campaignId, accountId: item.accountId }));
+  }
+  if (command === 'coverage') {
+    const registry = loadRegistry(), current = loadState(), siblings = campaignJobs(current, id);
+    return registry.accounts.map(account => ({ accountId: account.id, channel: account.channel, jobId: siblings.find(item => item.accountId === account.id)?.id || null, status: siblings.find(item => item.accountId === account.id)?.status || 'missing' }));
   }
   if (command === 'plan') { const plan = input(); const current = loadState(); return update(state => setCampaignPlan(state, job(current, id).campaignId, plan)).jobs.filter(item => item.campaignId === job(current, id).campaignId).map(item => item.id); }
   if (command === 'draft') {
@@ -48,7 +65,7 @@ function run(args) {
   }
   if (command === 'approve') return job(update(state => approveDraft(state, id, { conflictAcknowledged: args.includes('--conflicts-reviewed') })), id);
   if (command === 'schedule') return job(update(state => scheduleJob(state, id, args[2])), id);
-  throw new Error('Usage: next-cli.mjs list|show ID|create < JSON|plan ID < JSON|draft ID < JSON|approve ID [--conflicts-reviewed]|schedule ID ISO_TIME');
+  throw new Error('Usage: next-cli.mjs list|show ID|create < JSON|complete-accounts ID|coverage ID|plan ID < JSON|draft ID < JSON|approve ID [--conflicts-reviewed]|schedule ID ISO_TIME');
 }
 try { process.stdout.write(JSON.stringify(run(process.argv.slice(2)), null, 2) + '\n'); }
 catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }

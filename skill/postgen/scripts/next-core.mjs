@@ -156,6 +156,25 @@ export function createCampaign(state, { accounts, audience, sources, model = 'co
   return validateState(next);
 }
 
+export function addCampaignAccounts(state, campaignId, accounts) {
+  const next = structuredClone(validateState(state));
+  const siblings = next.jobs.filter(job => job.campaignId === campaignId);
+  if (!siblings.length) throw new Error('Unknown campaign');
+  const seed = siblings[0];
+  if (seed.sources.some(source => source.expired || !source.text)) throw new Error('Campaign sources are no longer available');
+  const existing = new Set(siblings.map(job => job.accountId));
+  const now = new Date().toISOString();
+  for (const account of accounts) {
+    if (!nonempty(account.id, 80) || !nonempty(account.handle, 200) || !nonempty(account.goal, 500)) throw new Error('Invalid campaign account');
+    if (existing.has(account.id)) continue;
+    existing.add(account.id);
+    next.jobs.push({ id: crypto.randomUUID(), campaignId, accountId: account.id, accountHandle: account.handle, audience: seed.audience, goal: account.goal, model: seed.model, imageProvider: seed.imageProvider, projectName: seed.projectName, sources: structuredClone(seed.sources), plan: structuredClone(seed.plan), status: 'selected', draft: null, approval: null, schedule: null, diagnostics: [], createdAt: now, updatedAt: now });
+  }
+  if (next.jobs.length === state.jobs.length) return state;
+  next.revision++;
+  return validateState(next);
+}
+
 export function setCampaignPlan(state, campaignId, plan) {
   if (!plan || typeof plan.angle !== 'string' || !Array.isArray(plan.keyClaims) || !Array.isArray(plan.conflicts)) throw new Error('Invalid evidence plan');
   const next = structuredClone(validateState(state));
