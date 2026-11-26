@@ -9,6 +9,7 @@ export const TRACKED_ROUTES = {
   '/api/evaluate': '초안 평가',
   '/api/images/generate': '이미지 생성',
   '/api/images/regenerate': '이미지 재생성',
+  '/api/images/generate-batch': '이미지 일괄 생성',
   '/api/sample/analyze': '골든 샘플 분석',
   '/api/connector/inspect': 'MCP 서버 확인',
   '/api/prepare-mcp': 'MCP 초안 입력',
@@ -33,9 +34,16 @@ export function createActivityLog(now = () => Date.now()) {
     start({ route, label, jobId = null, imageId = null, title = null, detail = null }) {
       const duplicate = [...entries.values()].find(entry => entry.status === 'running' && entry.route === route && entry.jobId === jobId && entry.imageId === imageId && jobId);
       if (duplicate) throw new Error(`${label} is already running for this item; wait for it to finish`);
-      const entry = { id: crypto.randomUUID(), route, label, jobId, imageId, title, detail, status: 'running', startedAt: now(), finishedAt: null, error: null };
+      const entry = { id: crypto.randomUUID(), route, label, jobId, imageId, title, detail, status: 'running', startedAt: now(), finishedAt: null, error: null, progress: null };
       entries.set(entry.id, entry);
       return entry.id;
+    },
+    // Step counts for work made of several items (images in a batch): done of total, and when the current item began.
+    progress(id, { done, total, detail = undefined }) {
+      const entry = entries.get(id);
+      if (!entry || entry.status !== 'running' || !Number.isInteger(done) || !Number.isInteger(total) || total < 1) return;
+      entry.progress = { done: Math.min(done, total), total, itemStartedAt: now() };
+      if (detail !== undefined) entry.detail = detail;
     },
     finish(id, error = null) {
       const entry = entries.get(id);
@@ -50,7 +58,7 @@ export function createActivityLog(now = () => Date.now()) {
       const at = now();
       return [...entries.values()]
         .sort((a, b) => (a.status === 'running') === (b.status === 'running') ? b.startedAt - a.startedAt : a.status === 'running' ? -1 : 1)
-        .map(entry => ({ ...entry, startedAt: new Date(entry.startedAt).toISOString(), finishedAt: entry.finishedAt ? new Date(entry.finishedAt).toISOString() : null, elapsedMs: (entry.finishedAt || at) - entry.startedAt }));
+        .map(entry => ({ ...entry, progress: entry.progress && { done: entry.progress.done, total: entry.progress.total, itemElapsedMs: at - entry.progress.itemStartedAt }, startedAt: new Date(entry.startedAt).toISOString(), finishedAt: entry.finishedAt ? new Date(entry.finishedAt).toISOString() : null, elapsedMs: (entry.finishedAt || at) - entry.startedAt }));
     }
   };
 }

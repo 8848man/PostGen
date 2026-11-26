@@ -9,7 +9,7 @@ import { postingUrlFor, validatePostingUrl, loginUrlFor, checkLoginStatus, openI
 import { createActivityLog, TRACKED_ROUTES } from './activity.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { republishJob, createCampaign, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
+import { republishJob, createCampaign, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources, archiveStaleCampaigns, setCampaignArchived } from './core.mjs';
 import { evaluateDraft } from './evaluate.mjs';
 import { loadAssetsStandard, imageRequest, standardTask } from './assets-standard.mjs';
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
@@ -22,6 +22,7 @@ import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReser
 import { loadSettings, updateSettings } from './settings.mjs';
 import { codexModelOptions } from './codex-models.mjs';
 import { generateJobDraft } from './draft-job.mjs';
+import { averageImageMs, recordImageDuration } from './image-timing.mjs';
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 const token = crypto.randomBytes(24).toString('base64url');
@@ -54,9 +55,28 @@ function mutateRegistry(fn) {
 }
 function statusState() {
   const current = loadState(), due = refreshDue(current);
-  const pruned = pruneOldSources(due, loadSettings().retentionMonths);
+  const pruned = archiveStaleCampaigns(pruneOldSources(due, loadSettings().retentionMonths));
   if (pruned.revision !== current.revision) { pruned.revision = current.revision + 1; saveState(pruned, current.revision); }
   return pruned;
+}
+// One Codex image for one suggestion: the standard's ImageGen request with its reference originals, then a candidate to review.
+async function generateOneImage(jobId, imageId) {
+  const job = loadState().jobs.find(item => item.id === jobId);
+  const image = job?.draft?.images.find(item => item.id === imageId);
+  if (job?.status !== 'draft' || job.imageProvider !== 'codex' || !job.draft.imagePlanApproved || !image || image.generatedPath || image.pendingPath) throw new Error('Codex image is not ready for generation');
+  const settings = loadSettings();
+  const remaining = settings.maxImageGenerations - (image.generationAttempts || 0);
+  if (remaining <= 0) throw new Error('Image generation attempt limit reached');
+  const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
+  if (image.assetId && !asset) throw new Error('Selected asset unavailable');
+  const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description, kind: image.kind });
+  const startedAt = Date.now();
+  const result = await runImageAttempts({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description, model: settings.codexImageModel }, { remaining, autoCheck: settings.autoImageCheck });
+  recordImageDuration((Date.now() - startedAt) / Math.max(1, result.attempts.length));
+  let state;
+  try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, result.storedPath, result.attempts)); }
+  catch (error) { await discardGeneratedImage(result.storedPath); throw error; }
+  return { state, result };
 }
 function editorUrlFor(account) {
   return postingUrlFor(account);
@@ -121,7 +141,7 @@ const server = http.createServer(async (req, res) => {
     if (req.headers['x-postgen-token'] !== token) return json(res, 403, { error: 'Unauthorized' });
     if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, { state: statusState(), registry: loadRegistry(), connectors: loadConnectors(), settings: loadSettings(), codexModels: codexModelOptions(loadSettings().codexImageModel), postingAccounts: postingAccounts() });
     if (req.method === 'GET' && url.pathname === '/api/discover') return json(res, 200, discover(url.searchParams.get('workspace') || process.cwd(), { query: url.searchParams.get('query') || '' }));
-    if (req.method === 'GET' && url.pathname === '/api/activity') return json(res, 200, { activities: activity.list() });
+    if (req.method === 'GET' && url.pathname === '/api/activity') return json(res, 200, { activities: activity.list(), averageImageMs: averageImageMs() });
     if (req.method !== 'POST' || req.headers.origin !== origin) return json(res, 404, { error: 'Not found' });
     const input = await inputJson(req);
     if (TRACKED_ROUTES[url.pathname]) res.activityId = activity.start({ route: url.pathname, label: TRACKED_ROUTES[url.pathname], ...activitySubject(input) });
@@ -217,22 +237,40 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/images/position') return json(res, 200, { state: mutateState(current => setImagePosition(current, input.jobId, input.imageId, input.afterParagraph)) });
     if (url.pathname === '/api/images/remove') return json(res, 200, { state: mutateState(current => removeImageSuggestion(current, input.jobId, input.imageId)) });
     if (url.pathname === '/api/images/generate') {
-      const job = loadState().jobs.find(item => item.id === input.jobId);
-      const image = job?.draft?.images.find(item => item.id === input.imageId);
-      if (job?.status !== 'draft' || job.imageProvider !== 'codex' || !job.draft.imagePlanApproved || !image || image.generatedPath || image.pendingPath) throw new Error('Codex image is not ready for generation');
-      const settings = loadSettings();
-      const remaining = settings.maxImageGenerations - (image.generationAttempts || 0);
-      if (remaining <= 0) throw new Error('Image generation attempt limit reached');
-      const asset = image.assetId ? loadRegistry().assets?.find(item => item.id === image.assetId && item.accountId === job.accountId) : null;
-      if (image.assetId && !asset) throw new Error('Selected asset unavailable');
-      const request = imageRequest(job.draft.standard, { position: `본문 ${image.afterParagraph}번째 문단 뒤`, scene: image.description, kind: image.kind });
-      const result = await runImageAttempts({ request, referencePaths: [...(request?.referencePaths || []), ...(asset ? [asset.storedPath] : [])], scene: image.description, model: settings.codexImageModel }, { remaining, autoCheck: settings.autoImageCheck });
-      let state;
-      try { state = mutateState(current => recordImageCandidate(current, job.id, image.id, result.storedPath, result.attempts)); }
-      catch (error) { await discardGeneratedImage(result.storedPath); throw error; }
+      const { state, result } = await generateOneImage(input.jobId, input.imageId);
       const last = result.attempts.at(-1);
       return json(res, 200, { state, usage: last.usage, imageUsage: last.imageUsage, check: last.check, attempts: result.attempts.length });
     }
+    if (url.pathname === '/api/images/generate-batch') {
+      // Several channels at once: approve each plan for Codex, then make every missing image one after another.
+      // One failing channel does not stop the others; the result lists what each channel got.
+      const jobIds = Array.isArray(input.jobIds) ? [...new Set(input.jobIds.filter(id => typeof id === 'string'))] : [];
+      if (!jobIds.length) throw new Error('Select channels for image generation');
+      const plan = [];
+      for (const jobId of jobIds) {
+        const job = loadState().jobs.find(item => item.id === jobId);
+        if (job?.status !== 'draft' || !job.draft) { plan.push({ jobId, images: [], error: 'Only drafts can generate images' }); continue; }
+        try {
+          if (job.imageProvider !== 'codex') mutateState(current => setImageProvider(current, jobId, 'codex'));
+          if (!job.draft.imagePlanApproved) mutateState(current => approveImagePlan(current, jobId, null));
+        } catch (error) { plan.push({ jobId, images: [], error: error.message }); continue; }
+        plan.push({ jobId, images: job.draft.images.filter(image => !image.generatedPath && !image.pendingPath).map(image => image.id), error: null });
+      }
+      const total = plan.reduce((sum, entry) => sum + entry.images.length, 0);
+      const results = plan.map(entry => ({ jobId: entry.jobId, generated: 0, requested: entry.images.length, error: entry.error }));
+      let done = 0;
+      for (const [index, entry] of plan.entries()) {
+        for (const imageId of entry.images) {
+          activity.progress(res.activityId, { done, total, detail: `이미지 ${done + 1}/${total} 생성 중` });
+          try { await generateOneImage(entry.jobId, imageId); results[index].generated++; }
+          catch (error) { results[index].error = error.message; done += entry.images.length - results[index].generated; break; }
+          done++;
+        }
+      }
+      activity.progress(res.activityId, { done: total || 1, total: total || 1, detail: `이미지 ${results.reduce((sum, entry) => sum + entry.generated, 0)}/${total} 생성 완료` });
+      return json(res, 200, { state: loadState(), results, total });
+    }
+    if (url.pathname === '/api/archive') return json(res, 200, { state: mutateState(current => setCampaignArchived(current, input.jobId, input.archived === true)) });
     if (url.pathname === '/api/images/regenerate') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const image = job?.draft?.images.find(item => item.id === input.imageId);
