@@ -207,9 +207,9 @@ const server = http.createServer(async (req, res) => {
       if (!standard || standard.sha256 !== job.draft.standard.sha256) throw new Error('Assets Manager standard changed; regenerate the draft before evaluation');
       const sample = resolveAccount(registry, account.channel, account.handle).sample;
       const modelOptions = { provider: input.provider || job.model, model: input.model };
-      let evaluated; try { evaluated = await evaluateDraft({ draft: job.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources, standardChecks: standard.checks, standardText: standard.text }, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, 'evaluation', error.usage)); throw error; }
+      let evaluated; try { evaluated = await evaluateDraft({ draft: job.draft, sample, audience: job.audience, goal: job.goal, sources: job.sources, standardChecks: standard.checks, standardText: standard.text, lengthRule: standard.length }, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, 'evaluation', error.usage)); throw error; }
       mutateState(latest => recordModelUsage(latest, job.id, 'evaluation', evaluated.usage));
-      const state = mutateState(latest => setDraftEvaluation(latest, job.id, evaluated.evaluation));
+      const state = mutateState(latest => setDraftEvaluation(latest, job.id, evaluated.evaluation, { lengthRule: standard.length }));
       const usage = summarizeUsage([{ step: 'evaluation', usage: evaluated.usage }]);
       return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
     }

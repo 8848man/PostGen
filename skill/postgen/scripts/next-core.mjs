@@ -5,6 +5,7 @@ import { dataDir } from './profile.mjs';
 import { cleanTags, projectNameForSources, projectTitle, withNaverTagLine } from './post-metadata.mjs';
 import { imagePositionAllowed, settleImagePosition, unmatchedHeadings } from './body-structure.mjs';
 import { isSocialChannel, socialDraftProblems } from './channel-rules.mjs';
+import { checkLengthFloor } from './length-rule.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
@@ -199,10 +200,14 @@ export function recordModelUsage(state, id, step, usage, { campaign = false, cal
   return validateState(next);
 }
 
-export function setDraftEvaluation(state, id, evaluation) {
+// lengthRule comes from the same standard (sha256 already matched) that the evaluation loaded; it fills in
+// the record of drafts written before the record kept the length rule, so their length check shows too.
+export function setDraftEvaluation(state, id, evaluation, { lengthRule = null } = {}) {
   return change(state, id, ['draft'], job => {
     if (!hasDraftStandard(job.draft)) throw new Error('Draft standard record is missing; regenerate before evaluation');
     job.draft.evaluation = evaluation;
+    if (lengthRule && !job.draft.standard.length) job.draft.standard.length = lengthRule;
+    job.draft.lengthCheck = checkLengthFloor(job.draft.body, job.draft.standard.length);
   });
 }
 
@@ -213,7 +218,7 @@ export function setDraft(state, id, draft, diagnostics = [], { channel = null } 
     const tagged = channel === 'naver' ? withNaverTagLine(draft.body, tags, job.draft?.tags || []) : { body: draft.body, paragraphShift: 0 };
     // Positions inside the table of contents or a list move to the subheading / the block before the list.
     const images = (draft.images || []).map(image => ({ ...image, afterParagraph: settleImagePosition(tagged.body, draft.headings || [], image.afterParagraph + tagged.paragraphShift) }));
-    job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags, body: tagged.body, claims: draft.claims || [], images, headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
+    job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags, body: tagged.body, claims: draft.claims || [], images, headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, lengthCheck: checkLengthFloor(tagged.body, draft.standard?.length), revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
     job.review = null;

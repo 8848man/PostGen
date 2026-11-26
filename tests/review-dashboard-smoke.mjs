@@ -24,7 +24,7 @@ try {
   const standard = { set: 'naver-blog-post', sha256: 'a'.repeat(64) };
   state = setDraft(state, state.jobs[0].id, { title: '네이버 글', body: '네이버 본문', tags: ['네이버'], claims: [], images: [], standard });
   saveState(state, 1);
-  state = setDraft(state, state.jobs[1].id, { title: '티스토리 글', body: '티스토리 본문', claims: [], images: [], standard });
+  state = setDraft(state, state.jobs[1].id, { title: '티스토리 글', body: '티스토리 본문', claims: [], images: [], standard: { ...standard, set: 'tistory-blog-post', length: { rule: '본문 3,000~5,000자(공백 제외)', min: 3000, max: 5000, excludeSpaces: true } } });
   saveState(state, 2);
 
   child = spawn(process.execPath, [path.resolve('next/server.mjs')], { env: process.env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -42,6 +42,7 @@ try {
   await page.locator('.channel-card').filter({ hasText: '티스토리' }).click();
   await page.locator('#jobs').getByText('티스토리 본문').waitFor();
   assert.match(await page.locator('#jobs').innerText(), /티스토리 본문/);
+  assert.match(await page.locator('.length-warning').innerText(), /분량 부족: 본문 6자\(공백 제외\) · 표준 하한 3,000자/);
   await page.getByRole('checkbox', { name: '수동으로 발행함' }).check();
   await page.waitForFunction(() => document.querySelector('.campaign-progress')?.textContent.includes('1/2'));
   assert.match(await page.locator('.campaign-progress').innerText(), /1\/2/);
