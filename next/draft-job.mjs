@@ -6,6 +6,7 @@ import { loadState, saveState, recordModelUsage, setCampaignPlan, setDraft } fro
 import { generateDraft, generatePlan } from './generate.mjs';
 import { projectNameForSources } from './post-metadata.mjs';
 import { assetsStandardConfig, loadAssetsStandard, standardRecord, standardTask } from './assets-standard.mjs';
+import { checkLengthFloor, lengthFloorMessage } from '../skill/postgen/scripts/length-rule.mjs';
 
 function mutateState(fn) {
   const current = loadState();
@@ -44,6 +45,9 @@ export async function generateJobDraft(jobId, { provider, model } = {}, deps = {
   try { output = await writeDraft(generationInput, modelOptions); }
   catch (error) { mutateState(latest => recordModelUsage(latest, job.id, step, error.usage)); throw error; }
   output.draft.standard = standardRecord(standard);
+  // Reported at generation too (next-cli `generate` prints diagnostics); the review screen reads draft.lengthCheck.
+  const length = checkLengthFloor(output.draft.body, output.draft.standard?.length);
+  if (length?.below) output.diagnostics.push({ code: 'length_below_standard', message: lengthFloorMessage(length) });
   usageEntries.push({ step, usage: output.usage });
   mutateState(latest => recordModelUsage(latest, job.id, step, output.usage));
   const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics, { channel: account.channel }));

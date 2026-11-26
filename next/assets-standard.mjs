@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { parseLengthRule } from '../skill/postgen/scripts/length-rule.mjs';
 
 // Tistory has its own set since 2026-11-25 (polite informational tone; N-026). Environment variables override either.
 // Social channels have their own sets (drafts created 2026-11-26 for review in Assets Manager).
@@ -97,7 +98,8 @@ export function parseStandard(raw, expectedSet) {
     files,
     imageTemplate: imageRequestTemplate(result.text),
     chartReference: chartReference(result.text),
-    checks: standardChecks(result.text)
+    checks: standardChecks(result.text),
+    length: parseLengthRule(result.text)
   };
 }
 
@@ -113,5 +115,5 @@ export async function loadAssetsStandard({ channel, task }, config = assetsStand
 
 // What the draft keeps: enough to trace which standard wrote it, not the whole prompt.
 export function standardRecord(standard) {
-  return standard ? { set: standard.set, title: standard.title, sha256: standard.sha256, files: standard.files, imageTemplate: standard.imageTemplate, chartReference: standard.chartReference } : null;
+  return standard ? { set: standard.set, title: standard.title, sha256: standard.sha256, files: standard.files, imageTemplate: standard.imageTemplate, chartReference: standard.chartReference, length: standard.length || null } : null;
 }

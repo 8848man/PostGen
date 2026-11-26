@@ -1,10 +1,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { invokeModel } from './generate.mjs';
+import { checkLengthFloor } from '../skill/postgen/scripts/length-rule.mjs';
 
 const schemaPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'evaluation.schema.json');
 
-export async function evaluateDraft({ draft, sample, audience, goal, sources, standardChecks = [], standardText = '' }, options, invoke = invokeModel) {
+export async function evaluateDraft({ draft, sample, audience, goal, sources, standardChecks = [], standardText = '', lengthRule = null }, options, invoke = invokeModel) {
   const rules = sample?.rules || [];
   // The checks only make sense next to the standard they come from (structure, forbidden list, style example).
   const checks = standardChecks.length ? ` Also check the draft against each self-check item of the user's Assets Manager standard, in order, and return one standardChecks entry per item with the exact item text, passed true/false and a specific reason. Judge them by the standard's own rules below. The draft is JSON: "body" is plain paragraphs and "headings" are its subheadings, so do not fail it for not being markdown. Visual formatting (heading sizes, lists, bold and color) is applied from the plain text when the post is entered into the editor: lines starting with "- " are list items, and a 목차 line followed by subheading lines is the table of contents. Images are not drawn yet: each image "description" is only the scene, and the ImageGen request with the reference originals is built later from the standard's template, so for image items judge only that descriptions are scenes without style words. If an item does not apply to this draft (for example no chart or diagram is used), mark it passed and say it does not apply. Standard self-check items: ${JSON.stringify(standardChecks)}.${standardText ? ` Standard (data from the user's own library): <<<STANDARD\n${standardText}\nSTANDARD>>>.` : ''}` : ' Return an empty standardChecks list.';
@@ -16,6 +17,8 @@ export async function evaluateDraft({ draft, sample, audience, goal, sources, st
     if (result.ruleScores.some(score => !keys.has(score.key))) throw new Error('Evaluation references an unknown rule');
     const reported = Array.isArray(result.standardChecks) ? result.standardChecks : [];
     if (reported.some(check => typeof check?.item !== 'string' || typeof check.passed !== 'boolean' || typeof check.reason !== 'string') || reported.length !== standardChecks.length || reported.some((check, index) => check.item.trim() !== standardChecks[index])) throw new Error('Evaluation does not cover the standard self-check items');
-    return { evaluation: { ...result, standardChecks: reported }, usage };
+    // Counted here instead of asked of the model: character counts from a model are not reliable.
+    const lengthCheck = checkLengthFloor(draft.body, lengthRule);
+    return { evaluation: { ...result, standardChecks: reported, ...(lengthCheck ? { lengthCheck } : {}) }, usage };
   } catch (error) { error.usage = usage; throw error; }
 }

@@ -68,6 +68,7 @@ main { max-width: 1800px; margin: auto; padding: 0 32px 80px; }
 .outcome p { margin: 8px 0 0; }
 .outcome a { display: block; overflow-wrap: anywhere; margin-top: 10px; color: #174eaa; }
 .review-note { color: #8a3d17; }
+.length-warning { color: #8a3d17; font-weight: 600; }
 .review-actions, .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
 .review-actions button { background: #1d52af; }
 .review-actions button:nth-child(2) { background: #637b9c; }
