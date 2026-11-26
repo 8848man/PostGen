@@ -78,6 +78,26 @@ export function bodyBlocks(body, headings = []) {
     return block('p', null, [{ text: line }]);
   });
 }
+// An image goes after a whole block, never inside the table of contents or a list: editors insert it at the end of the
+// clicked block, which inside a list puts it in the list (Tistory refuses that). Models also count the table of contents
+// entry when they mean the subheading it repeats. Returns the corrected 1-based position:
+// - a table of contents entry moves to its real subheading (images go right under a big subheading);
+// - a list item moves to the block just before that list.
+export function settleImagePosition(body, headings, afterParagraph) {
+  const blocks = bodyBlocks(body, headings);
+  let index = afterParagraph - 1;
+  if (!Number.isInteger(afterParagraph) || index < 0 || index >= blocks.length) return afterParagraph;
+  if (blocks[index].list === 'toc') {
+    const heading = blocks.findIndex(item => (item.tag === 'h2' || item.tag === 'h3') && item.text === blocks[index].text);
+    if (heading >= 0) return heading + 1;
+  }
+  if (blocks[index].tag !== 'li') return afterParagraph;
+  const kind = blocks[index].list;
+  while (index > 0 && blocks[index - 1].tag === 'li' && blocks[index - 1].list === kind) index--;
+  return index > 0 ? index : afterParagraph;
+}
+export const imagePositionAllowed = (body, headings, afterParagraph) => bodyBlocks(body, headings)[afterParagraph - 1]?.tag !== 'li';
+
 function block(tag, list, parts) {
   return { tag, list, text: parts.map(part => part.text).join(''), bold: parts.filter(part => part.bold).map(part => part.text).join(''), colored: parts.some(part => part.colored), parts };
 }
