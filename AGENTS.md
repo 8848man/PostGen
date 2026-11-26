@@ -56,7 +56,7 @@ Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저�
 
 볼트 원문(`posts/` 등)으로 PostGen 작업(create → plan → draft)을 만들 때는 검토 화면이 쓰는 데이터 폴더에 만든다. 다른 폴더에 만들면 사용자가 검토 화면에서 초안을 볼 수 없다.
 
-원문 한 건마다 `account-registry.json`에 등록된 **모든 게시 계정**의 글을 만든다(N-028). 새 작업은 `next-cli create`에 `allRegisteredAccounts: true`를 전달해 같은 캠페인으로 묶는다. 기존 캠페인에 빠진 계정이 있으면 `complete-accounts <jobId>`로 해당 계정만 추가한다. 공통 `plan` 뒤 각 계정에 채널별 Assets Manager 표준과 승인된 골든 샘플 규칙을 적용해 독립된 `draft`를 저장하고, `coverage <jobId>`에서 모든 등록 계정이 `draft`인지 확인한다. 일부 실패 시 이미 만든 다른 계정의 초안은 덮어쓰지 않는다.
+원문 한 건마다 `account-registry.json`에 등록된 **모든 게시 계정**의 글을 만든다(N-028). 새 작업은 `next-cli create`에 `allRegisteredAccounts: true`를 전달해 같은 캠페인으로 묶는다. 기존 캠페인에 빠진 계정이 있으면 `complete-accounts <jobId>`로 해당 계정만 추가한다. 공통 `plan` 뒤 각 계정의 초안은 `next-cli generate <jobId>`로 만든다. 이 명령은 검토 화면의 초안 생성과 같은 경로로 채널별 Assets Manager 표준과 승인된 골든 샘플 규칙을 생성 프롬프트에 넣고 표준 기록·사용량을 남긴다. 에이전트가 본문을 직접 써서 `draft`로 저장하면 넘긴 표준 기록은 버려지고 "표준 미검증" 초안이 되므로 원문 초안에 쓰지 않는다(2026-11-26 원문 16건이 표준 없이 작성된 사례). 그 뒤 `coverage <jobId>`에서 모든 등록 계정이 `draft`인지 확인한다. 일부 실패 시 이미 만든 다른 계정의 초안은 덮어쓰지 않는다.
 
 초안의 `images`에는 본문 내용에 맞는 이미지 장면 제안과 배치 위치를 포함한다. 이미지 파일을 지금 생성하지 않아도 장면 제안은 작성한다. 이미지 없이 진행하려면 그 선택을 명시하고 CLI 경고를 확인한다.
 

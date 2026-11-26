@@ -74,3 +74,39 @@ test('vault post campaigns cover every registered account and add only missing a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('CLI drafts drop a supplied standard record and generate uses the standard path', async () => {
+  const dir = fs.mkdtempSync(path.join(path.resolve('tests'), '.postgen-cli-standard-'));
+  const previousData = process.env.POSTGEN_DATA_DIR, previousNext = process.env.POSTGEN_NEXT_DIR;
+  const env = { ...process.env, POSTGEN_DATA_DIR: dir, POSTGEN_NEXT_DIR: path.join(dir, 'next') };
+  process.env.POSTGEN_DATA_DIR = dir; process.env.POSTGEN_NEXT_DIR = env.POSTGEN_NEXT_DIR;
+  const cli = (args, input = '') => spawnSync(process.execPath, [path.resolve('skill/postgen/scripts/next-cli.mjs'), ...args], { env, input, encoding: 'utf8' });
+  try {
+    const registry = addAccount(emptyRegistry(), { channel: 'naver', handle: 'account', defaultGoal: 'explain' });
+    saveRegistry(registry, 0);
+    const [created] = JSON.parse(cli(['create'], JSON.stringify({ accountIds: [registry.accounts[0].id], audience: 'reader', sources: [{ id: 's1', type: 'text', ref: 'posts/postgen/a.md', text: 'source fact' }] })).stdout);
+    const forged = { set: 'naver-blog-post', title: 'standard', sha256: 'a'.repeat(64), files: [], imageTemplate: null, chartReference: null };
+    const drafted = cli(['draft', created.id], JSON.stringify({ title: 'Host title', body: 'Host body', claims: [], images: [], standard: forged }));
+    assert.equal(drafted.status, 0, drafted.stderr);
+    assert.match(drafted.stderr, /ignored the supplied standard record/);
+    assert.equal(loadState().jobs[0].draft.standard, null);
+
+    const { generateJobDraft } = await import('../next/draft-job.mjs');
+    const standard = { set: 'naver-blog-post', title: 'standard', sha256: 'b'.repeat(64), text: 'rules', files: [], imageTemplate: null, chartReference: null, checks: [] };
+    let prompted = null;
+    const { usageEntries } = await generateJobDraft(created.id, {}, {
+      config: { cli: 'cli.py', sets: { naver: 'naver-blog-post' } },
+      standard: async () => standard,
+      draft: async input => { prompted = input; return { draft: { title: 'Generated', tags: [], body: 'Generated body', headings: [], claims: [], images: [] }, diagnostics: [], usage: { known: false } }; }
+    });
+    assert.equal(prompted.standard, standard);
+    const job = loadState().jobs[0];
+    assert.equal(job.draft.standard.sha256, standard.sha256);
+    assert.deepEqual(job.modelUsage.map(entry => entry.step), ['plan-and-draft']);
+    assert.deepEqual(usageEntries.map(entry => entry.step), ['plan-and-draft']);
+  } finally {
+    if (previousData === undefined) delete process.env.POSTGEN_DATA_DIR; else process.env.POSTGEN_DATA_DIR = previousData;
+    if (previousNext === undefined) delete process.env.POSTGEN_NEXT_DIR; else process.env.POSTGEN_NEXT_DIR = previousNext;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
