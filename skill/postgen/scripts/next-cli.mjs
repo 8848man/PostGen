@@ -21,7 +21,7 @@ function job(state, id) {
 }
 const vaultSources = sources => Array.isArray(sources) && sources.length > 0 && sources.every(source => typeof source.ref === 'string' && source.ref.startsWith('posts/'));
 const campaignJobs = (state, id) => state.jobs.filter(item => item.campaignId === job(state, id).campaignId);
-function run(args) {
+async function run(args) {
   const [command, id] = args;
   if (command === 'list') return loadState().jobs.map(item => ({ id: item.id, campaignId: item.campaignId, accountId: item.accountId, accountHandle: item.accountHandle, status: item.status, title: item.draft?.title || null, revision: item.draft?.revision || 0 }));
   if (command === 'show') return job(loadState(), id);
@@ -61,11 +61,19 @@ function run(args) {
     if (!Array.isArray(draft.images) || draft.images.length === 0) {
       process.stderr.write('Warning: draft has no image scene suggestions; review images before approving.\n');
     }
-    return job(update(state => setDraft(state, id, draft, [], { channel: account?.channel || null })), id);
+    // A host-written draft did not go through the standard prompt, so a supplied standard record is dropped: the draft
+    // stays "standard unverified" until it is regenerated with `generate` (or the user confirms it at publication).
+    process.stderr.write(draft.standard ? 'Warning: ignored the supplied standard record; host-written drafts stay standard-unverified. Use `generate <jobId>` for a standard-based draft.\n' : 'Note: host-written draft is standard-unverified. Use `generate <jobId>` for a standard-based draft.\n');
+    return job(update(state => setDraft(state, id, { ...draft, standard: null }, [], { channel: account?.channel || null })), id);
+  }
+  if (command === 'generate') {
+    const provider = args.includes('--provider') ? args[args.indexOf('--provider') + 1] : undefined;
+    const { generateJobDraft } = await import('../../../next/draft-job.mjs');
+    return job((await generateJobDraft(id, { provider })).state, id);
   }
   if (command === 'approve') return job(update(state => approveDraft(state, id, { conflictAcknowledged: args.includes('--conflicts-reviewed') })), id);
   if (command === 'schedule') return job(update(state => scheduleJob(state, id, args[2])), id);
-  throw new Error('Usage: next-cli.mjs list|show ID|create < JSON|complete-accounts ID|coverage ID|plan ID < JSON|draft ID < JSON|approve ID [--conflicts-reviewed]|schedule ID ISO_TIME');
+  throw new Error('Usage: next-cli.mjs list|show ID|create < JSON|complete-accounts ID|coverage ID|plan ID < JSON|draft ID < JSON|generate ID [--provider codex|claude]|approve ID [--conflicts-reviewed]|schedule ID ISO_TIME');
 }
-try { process.stdout.write(JSON.stringify(run(process.argv.slice(2)), null, 2) + '\n'); }
+try { process.stdout.write(JSON.stringify(await run(process.argv.slice(2)), null, 2) + '\n'); }
 catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }

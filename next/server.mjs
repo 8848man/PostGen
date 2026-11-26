@@ -9,11 +9,9 @@ import { postingUrlFor, validatePostingUrl, loginUrlFor, checkLoginStatus, openI
 import { createActivityLog, TRACKED_ROUTES } from './activity.mjs';
 import { discover } from '../skill/postgen/scripts/collect.mjs';
 import { collectSelected } from './sources.mjs';
-import { republishJob, createCampaign, setCampaignPlan, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
-import { generateDraft, generatePlan } from './generate.mjs';
-import { projectNameForSources } from './post-metadata.mjs';
+import { republishJob, createCampaign, recordModelUsage, setDraftEvaluation, loadState, saveState, acquireDraftLock, releaseDraftLock, setDraft, approveImagePlan, setImageProvider, setImagePosition, removeImageSuggestion, attachGeneratedImage, recordImageCandidate, recordReplacementCandidate, confirmImageCandidate, discardImageCandidate, acceptImageCheck, approveDraft, reviewDraft, publishDraftReservation, scheduleJob, rescheduleExpired, refreshDue, startPreparation, reviewPreparation, approveEditorChanges, beginScheduleSubmission, markScheduleUnknown, confirmPlatformSchedule, confirmUnknownSchedule, recordPublication, declineImplicitPublication, recordAutomationError, markManualPublication, unmarkManualPublication, cancelJob, retryPublication, pruneOldSources, restoreRetainedSources } from './core.mjs';
 import { evaluateDraft } from './evaluate.mjs';
-import { assetsStandardConfig, loadAssetsStandard, standardRecord, imageRequest, standardTask } from './assets-standard.mjs';
+import { loadAssetsStandard, imageRequest, standardTask } from './assets-standard.mjs';
 import { normalizeUsage, summarizeUsage, describeUsage } from './usage.mjs';
 import { analyzeSample } from './sample-analysis.mjs';
 import { importAsset, importGeneratedImage, previewGeneratedImage, discardGeneratedImage } from './images.mjs';
@@ -23,6 +21,7 @@ import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp, tagsNeed
 import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckPlatformReservation } from './browser-adapter.mjs';
 import { loadSettings, updateSettings } from './settings.mjs';
 import { codexModelOptions } from './codex-models.mjs';
+import { generateJobDraft } from './draft-job.mjs';
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
 const token = crypto.randomBytes(24).toString('base64url');
@@ -171,30 +170,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { state });
     }
     if (url.pathname === '/api/generate') {
-      const current = loadState(); let job = current.jobs.find(item => item.id === input.jobId);
-      if (!job || !['selected','draft'].includes(job.status)) throw new Error('Job is not ready for generation');
-      if (job.sources.some(source => source.expired)) throw new Error('Source copy expired; restore it or create a new job');
-      const registry = loadRegistry(), account = registry.accounts.find(item => item.id === job.accountId);
-      if (!account) throw new Error('Account no longer exists');
-      const sample = resolveAccount(registry, account.channel, account.handle).sample;
-      const modelOptions = { provider: input.provider || job.model, model: input.model };
-      if (!['codex', 'claude'].includes(modelOptions.provider)) throw new Error('Direct API generation is disabled; use Codex or Claude Code');
-      const assetsConfig = assetsStandardConfig();
-      if (!assetsConfig.cli || !assetsConfig.sets[account.channel]) throw new Error('Configure POSTGEN_ASSETS_CLI and an Assets Manager set before generating a reviewable draft');
-      const usageEntries = [];
-      const shared = current.jobs.filter(item => item.campaignId === job.campaignId).length > 1;
-      if (shared && !job.plan) { let planned; try { planned = await generatePlan(job.sources, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, 'shared-plan', error.usage, { campaign: true })); throw error; } usageEntries.push({ step: 'shared-plan', usage: planned.usage }); mutateState(latest => recordModelUsage(latest, job.id, 'shared-plan', planned.usage, { campaign: true })); const plannedState = mutateState(latest => setCampaignPlan(latest, job.campaignId, planned.plan)); job = plannedState.jobs.find(item => item.id === input.jobId); }
-      // The user's Assets Manager standard is loaded per draft; the task is the shared plan's angle,
-      // so the library can also pick related past outputs as examples.
-      const standard = await loadAssetsStandard({ channel: account.channel, task: standardTask(account.channel, job.plan?.angle || job.audience) });
-      const revisionRequest = job.review && job.draft ? { decision: job.review.decision, note: job.review.note, previousTitle: job.draft.title, previousBody: job.draft.body.slice(0, 12_000), previousBodyTruncated: job.draft.body.length > 12_000 } : null;
-      const generationInput = { sources: job.sources, account, sample, audience: job.audience, goal: job.goal, plan: job.plan, standard, revisionRequest, projectName: job.projectName || projectNameForSources(job.sources) };
-      const step = shared ? 'draft' : 'plan-and-draft';
-      let output; try { output = await generateDraft(generationInput, modelOptions); } catch (error) { mutateState(latest => recordModelUsage(latest, job.id, step, error.usage)); throw error; }
-      output.draft.standard = standardRecord(standard);
-      usageEntries.push({ step, usage: output.usage });
-      mutateState(latest => recordModelUsage(latest, job.id, step, output.usage));
-      const state = mutateState(latest => setDraft(latest, job.id, output.draft, output.diagnostics, { channel: account.channel }));
+      const { state, usageEntries } = await generateJobDraft(input.jobId, { provider: input.provider, model: input.model });
       const usage = summarizeUsage(usageEntries);
       return json(res, 200, { state, usage: { ...usage, text: describeUsage(usage) } });
     }
