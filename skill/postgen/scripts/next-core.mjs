@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { dataDir } from './profile.mjs';
 import { cleanTags, projectNameForSources, projectTitle, withNaverTagLine } from './post-metadata.mjs';
-import { unmatchedHeadings } from './body-structure.mjs';
+import { imagePositionAllowed, settleImagePosition, unmatchedHeadings } from './body-structure.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
@@ -210,7 +210,8 @@ export function setDraft(state, id, draft, diagnostics = [], { channel = null } 
     if (!nonempty(draft?.title, 300)) throw new Error('Draft title is required');
     const tags = cleanTags(draft.tags || []);
     const tagged = channel === 'naver' ? withNaverTagLine(draft.body, tags, job.draft?.tags || []) : { body: draft.body, paragraphShift: 0 };
-    const images = (draft.images || []).map(image => ({ ...image, afterParagraph: image.afterParagraph + tagged.paragraphShift }));
+    // Positions inside the table of contents or a list move to the subheading / the block before the list.
+    const images = (draft.images || []).map(image => ({ ...image, afterParagraph: settleImagePosition(tagged.body, draft.headings || [], image.afterParagraph + tagged.paragraphShift) }));
     job.draft = { title: projectTitle(draft.title, job.projectName || projectNameForSources(job.sources)), tags, body: tagged.body, claims: draft.claims || [], images, headings: draft.headings || [], imagePlanApproved: draft.imagePlanApproved || false, evaluation: draft.evaluation || null, standard: draft.standard || null, revision: (job.draft?.revision || 0) + 1 };
     job.diagnostics = diagnostics;
     job.approval = null;
@@ -263,6 +264,7 @@ export function setImagePosition(state, id, imageId, afterParagraph) {
     const image = job.draft?.images.find(item => item.id === imageId);
     const paragraphs = job.draft?.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim()).length || 0;
     if (!image || !Number.isInteger(afterParagraph) || afterParagraph < 1 || afterParagraph > paragraphs) throw new Error('Choose a paragraph in this draft');
+    if (!imagePositionAllowed(job.draft.body, job.draft.headings || [], afterParagraph)) throw new Error('Images cannot go inside the table of contents or a list; choose a paragraph or subheading');
     image.afterParagraph = afterParagraph;
     job.draft.revision = (job.draft.revision || 0) + 1;
   });
@@ -381,6 +383,8 @@ export function publishDraftReservation(state, id, at, { conflictAcknowledged = 
     if (standardUnverified && !standardUnverifiedAcknowledged) throw new Error('Unverified draft standard requires explicit publication confirmation');
     const paragraphs = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
     const imageIds = new Set();
+    // Drafts saved before positions were settled: move images out of the table of contents and lists before approval.
+    for (const image of job.draft.images) image.afterParagraph = settleImagePosition(job.draft.body, job.draft.headings || [], image.afterParagraph);
     for (const image of job.draft.images) {
       if (!nonempty(image.id, 80) || imageIds.has(image.id) || !Number.isInteger(image.afterParagraph) || image.afterParagraph < 1 || image.afterParagraph > paragraphs.length || !nonempty(image.description, 2000)) throw new Error('Image suggestions need unique IDs and existing paragraph positions');
       if (!fs.existsSync(image.pendingPath || image.generatedPath || '')) throw new Error('Image file is missing; make the image again before publishing');

@@ -21,6 +21,21 @@ async function generateImagesFor(jobIds) {
   const failed = results.filter(entry => entry.error);
   say(failed.length ? `이미지 ${made}/${total}장을 만들었습니다. 실패: ${failed.map(entry => `${channelName(entry.jobId)} (${entry.error})`).join(', ')}` : `이미지 ${made}장이 준비됐습니다. 확인한 뒤 발행하세요.`, 60_000);
 }
+// Non-empty body lines an image cannot follow: table of contents entries and list items (mirrors
+// settleImagePosition in body-structure.mjs; the server enforces it).
+function imageBlockedLines(lines, headings) {
+  const blocked = new Set(), known = new Set(headings), trimmed = lines.map(line => line.trim());
+  for (let index = 0; index < trimmed.length; index++) {
+    if (/^[-•·]\s+/.test(trimmed[index])) blocked.add(index);
+    if (!/^목차\s*:?$/.test(trimmed[index])) continue;
+    for (let next = index + 1; next < trimmed.length; next++) {
+      const entry = trimmed[next].replace(/^[-•·]\s+/, '');
+      if (!known.has(entry) || !trimmed.slice(next + 1).includes(entry)) break;
+      blocked.add(next);
+    }
+  }
+  return blocked;
+}
 function channelName(jobId) {
   const job = cache.state.jobs.find(item => item.id === jobId);
   const account = cache.registry.accounts.find(item => item.id === job?.accountId);
@@ -455,7 +470,8 @@ async function refresh() {
         if (job.status === 'draft') {
           const placement = document.createElement('div'); placement.className = 'image-placement';
           const select = document.createElement('select'); select.setAttribute('aria-label', `${image.description} 배치 위치`);
-          for (const [index, paragraph] of paragraphs.entries()) { const option = document.createElement('option'); option.value = String(index + 1); option.textContent = `${index + 1}번째 문단 뒤 · ${excerpt(paragraph, 70)}`; option.selected = index + 1 === image.afterParagraph; select.append(option); }
+          const listLines = imageBlockedLines(paragraphs, job.draft.headings || []);
+          for (const [index, paragraph] of paragraphs.entries()) { const option = document.createElement('option'); option.value = String(index + 1); option.disabled = listLines.has(index) && index + 1 !== image.afterParagraph; option.textContent = `${index + 1}번째 문단 뒤 · ${excerpt(paragraph, 70)}${listLines.has(index) ? ' (목차·목록 안 · 선택 불가)' : ''}`; option.selected = index + 1 === image.afterParagraph; select.append(option); }
           select.onchange = async () => { try { await api('/api/images/position', { jobId: job.id, imageId: image.id, afterParagraph: Number(select.value) }); await refresh(); say('이미지 위치를 저장했습니다.'); } catch (error) { say(error.message); } };
           placement.append(select);
           block.append(placement);
