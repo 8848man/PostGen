@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { chromium } from 'playwright-core';
 import { dataDir } from '../skill/postgen/scripts/profile.mjs';
 import { bodyBlocks, blockDifference, headingOccurrence, tistoryHtml } from '../skill/postgen/scripts/body-structure.mjs';
+import { leaveDialogsToUser, markAutomationPage } from './browser-dialogs.mjs';
 
 const sessions = new Map();
 let attachedEdge = null;
@@ -35,6 +36,8 @@ export async function connectExistingEdge(value, connect = (endpoint, options) =
   const browser = await connect(endpoint, { timeout: endpoint === 'msedge' ? 60000 : 10000, noDefaults: true, isLocal: true });
   const context = browser.contexts()[0];
   if (!context) throw new Error('The connected browser has no default profile');
+  // The review screen runs in this same browser; its confirm() dialogs belong to the user.
+  leaveDialogsToUser(context);
   return { browser, context };
 }
 // Reuse a connection the caller already holds so Edge does not ask for debugging approval again.
@@ -417,7 +420,7 @@ export async function openEditor(job, editorUrl, mapping = null) {
     : { context: await chromium.launchPersistentContext(path.join(profileRoot(), job.accountId), { channel: 'msedge', headless: false, acceptDownloads: false }) };
   let sessionId;
   try {
-    const page = attached ? await context.newPage() : context.pages()[0] || await context.newPage();
+    const page = markAutomationPage(attached ? await context.newPage() : context.pages()[0] || await context.newPage());
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 30_000 });
     sessionId = crypto.randomUUID();
     sessions.set(sessionId, { context, page, attached, mapping, editorUrl: url.toString(), jobId: job.id, channel: job.channel, accountHandle: job.accountHandle });
@@ -649,7 +652,7 @@ export function naverReservationListCount(text, title, at) {
 
 // Open a separate editor tab only to read the reservation list, then close it. Never edits or publishes.
 export async function readNaverReservationList(context, handle) {
-  const page = await context.newPage();
+  const page = markAutomationPage(await context.newPage());
   try {
     await page.goto(`https://blog.naver.com/${handle}?Redirect=Write&`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     const frame = page.frameLocator('iframe#mainFrame');
@@ -692,7 +695,7 @@ export function tistoryRecheckResult(entries, job) {
 
 // Open a separate tab only to read the post list (first page, newest first), then close it. Never edits or publishes.
 export async function readTistoryPostList(context, handle) {
-  const page = await context.newPage();
+  const page = markAutomationPage(await context.newPage());
   try {
     await page.goto(`https://${handle}.tistory.com/manage/posts/`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     // The list renders after load; a blog with no posts never shows an entry, which reads as an empty list.

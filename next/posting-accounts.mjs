@@ -1,6 +1,7 @@
 // Posting address and login status per blog account. Login is read with the posting Chrome's cookies
 // through an HTTP request (no tab is opened), and the login page opens as a new tab in that same browser.
 import { chromium } from 'playwright-core';
+import { leaveDialogsToUser } from './browser-dialogs.mjs';
 
 const LOGIN_CHANNELS = ['naver', 'tistory'];
 
@@ -56,6 +57,8 @@ async function withPostingBrowser(endpoint, action, connect = url => chromium.co
   try {
     const context = browser.contexts()[0];
     if (!context) throw new Error('The posting Chrome has no open window');
+    // While connected, dialogs in the user's tabs (the review screen) stay with the user.
+    leaveDialogsToUser(context);
     return await action(context);
   } finally {
     // Disconnects only; the user's browser keeps running.
