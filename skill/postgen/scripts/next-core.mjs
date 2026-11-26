@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { dataDir } from './profile.mjs';
 import { cleanTags, projectNameForSources, projectTitle, withNaverTagLine } from './post-metadata.mjs';
 import { imagePositionAllowed, settleImagePosition, unmatchedHeadings } from './body-structure.mjs';
+import { isSocialChannel, socialDraftProblems } from './channel-rules.mjs';
 
 const VERSION = 'postgen-next/v1';
 const DAY = 86_400_000;
@@ -374,11 +375,16 @@ export function scheduleJob(state, id, at, now = new Date()) {
 }
 
 // One final action accepts visible image candidates, approves the draft, and starts reservation preparation.
-export function publishDraftReservation(state, id, at, { conflictAcknowledged = false, standardUnverifiedAcknowledged = false } = {}, now = new Date()) {
+// Social channels (X, LinkedIn, Instagram, Reddit) have no reservation: the composer is filled now and the user posts.
+export function publishDraftReservation(state, id, at, { conflictAcknowledged = false, standardUnverifiedAcknowledged = false, channel = null } = {}, now = new Date()) {
+  const social = isSocialChannel(channel);
+  if (social) at = new Date(Math.ceil(now.getTime() / 60_000) * 60_000).toISOString();
   return change(state, id, ['draft'], job => {
-    if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
-    if (Date.parse(at) % (10 * 60_000) !== 0) throw new Error('Schedule must use ten-minute increments');
+    if (!social && (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000)) throw new Error('Schedule must be at least ten minutes in the future');
+    if (!social && Date.parse(at) % (10 * 60_000) !== 0) throw new Error('Schedule must use ten-minute increments');
     if (!job.draft) throw new Error('Missing draft');
+    const problems = social ? socialDraftProblems(channel, job.draft) : [];
+    if (problems.length) throw new Error(problems.join('; '));
     const standardUnverified = !hasDraftStandard(job.draft);
     if (standardUnverified && !standardUnverifiedAcknowledged) throw new Error('Unverified draft standard requires explicit publication confirmation');
     const paragraphs = job.draft.body.replace(/\r\n/g, '\n').split('\n').filter(line => line.trim());
@@ -398,7 +404,7 @@ export function publishDraftReservation(state, id, at, { conflictAcknowledged = 
     if (job.diagnostics.some(item => item.code === 'source_conflict') && !conflictAcknowledged) throw new Error('Source conflict needs explicit acknowledgement');
     job.approval = { at: now.toISOString(), draftRevision: job.draft.revision, conflictAcknowledged, ...(standardUnverified ? { standardUnverifiedAcknowledged: true } : {}) };
     job.review = null;
-    job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
+    job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(social ? now.getTime() + 7 * DAY : Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString(), ...(social ? { manualPost: true } : {}) };
     job.registration = null;
     job.status = 'awaiting_registration';
   });
@@ -437,13 +443,14 @@ export function refreshDue(state, now = new Date()) {
 }
 
 export function startPreparation(state, id, now = new Date()) { return change(state, id, ['awaiting_registration','due'], job => { if (now.getTime() >= Date.parse(job.schedule.expiresAt)) throw new Error('Reservation registration deadline passed'); job.status = 'preparing'; }); }
-export function reviewPreparation(state, id, { editorUrl, visibleAccount, title, body, uploadedImages = [] }) {
+export function reviewPreparation(state, id, { editorUrl, visibleAccount, title, body, uploadedImages = [], accountVerified = true, postedBy = null }) {
   return change(state, id, ['preparing'], job => {
     if (!nonempty(editorUrl, 2048) || !nonempty(visibleAccount, 200) || !nonempty(title, 300) || !nonempty(body)) throw new Error('Editor state incomplete');
     if (visibleAccount !== job.accountHandle) throw new Error('Account mismatch');
     const expected = job.draft.images.map(image => image.id);
     if (expected.some(imageId => !uploadedImages.includes(imageId))) throw new Error('Image upload or position unverified');
-    job.editor = { editorUrl, visibleAccount, title, body, uploadedImages, checkedAt: new Date().toISOString() };
+    // Social composers: the user posts, and some sites do not show which account is signed in (accountVerified false).
+    job.editor = { editorUrl, visibleAccount, title, body, uploadedImages, checkedAt: new Date().toISOString(), ...(accountVerified === false ? { accountVerified: false } : {}), ...(postedBy === 'user' ? { postedBy } : {}) };
     delete job.automationError;
     job.status = title.trim() === job.draft.title.trim() && body.trim() === job.draft.body.trim() ? 'ready_to_register' : 'review_required';
   });
@@ -555,7 +562,10 @@ export function retryPublication(state, id) {
 // A job that may already be on the platform (submission started or reservation verified) needs the user's check first.
 export const republishable = ['awaiting_registration','preparing','review_required','ready_to_register','expired','cancelled','failed','unknown','registered','verification_due'];
 export const republishNeedsPlatformCheck = job => Boolean(job.submission?.startedAt || job.registration);
-export function republishJob(state, id, at, { platformChecked = false } = {}, now = new Date()) {
+export function republishJob(state, id, at, { platformChecked = false, channel = null } = {}, now = new Date()) {
+  // Social channels: fill the composer again now; there is no reservation time.
+  const social = isSocialChannel(channel);
+  if (social) at = new Date(Math.ceil(now.getTime() / 60_000) * 60_000 + 11 * 60_000).toISOString();
   return change(state, id, republishable, job => {
     if (!job.draft || !job.approval?.at) throw new Error('Only an approved draft can be republished; retry from the draft instead');
     if (job.approval.draftRevision !== job.draft.revision) throw new Error('The approved draft changed; review it again before publishing');
@@ -563,7 +573,7 @@ export function republishJob(state, id, at, { platformChecked = false } = {}, no
     if (!iso(at) || Date.parse(at) <= now.getTime() + 10 * 60_000) throw new Error('Schedule must be at least ten minutes in the future');
     for (const image of job.draft.images) if (!image.generatedPath || !fs.existsSync(image.generatedPath)) throw new Error('Image file is missing; retry from the draft and make the image again');
     job.republishHistory = [...(job.republishHistory || []), { at: now.toISOString(), previousStatus: job.status, previousScheduleAt: job.schedule?.at || null, reason: job.submission?.reason ? String(job.submission.reason).slice(0, 500) : null, platformChecked: republishNeedsPlatformCheck(job) }].slice(-10);
-    job.schedule = { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
+    job.schedule = social ? { at: now.toISOString(), expiresAt: new Date(now.getTime() + 7 * DAY).toISOString(), manualPost: true } : { at: new Date(at).toISOString(), expiresAt: new Date(Math.min(Date.parse(at), now.getTime() + 7 * DAY)).toISOString() };
     job.editor = null;
     job.submission = null;
     job.registration = null;

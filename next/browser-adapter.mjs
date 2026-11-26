@@ -5,13 +5,16 @@ import { chromium } from 'playwright-core';
 import { dataDir } from '../skill/postgen/scripts/profile.mjs';
 import { bodyBlocks, blockDifference, headingOccurrence, tistoryHtml } from '../skill/postgen/scripts/body-structure.mjs';
 import { leaveDialogsToUser, markAutomationPage } from './browser-dialogs.mjs';
+import { fillSocialComposer, socialSignedIn } from './social-composer.mjs';
+import { SOCIAL_HOSTS, isSocialChannel } from '../skill/postgen/scripts/channel-rules.mjs';
 
 const sessions = new Map();
 let attachedEdge = null;
 const profileRoot = () => path.join(process.env.POSTGEN_NEXT_DIR || path.join(dataDir(), 'next'), 'browser-profiles');
 const channels = {
   naver: hostname => hostname === 'blog.naver.com' || hostname.endsWith('.blog.naver.com'),
-  tistory: hostname => hostname === 'tistory.com' || hostname.endsWith('.tistory.com')
+  tistory: hostname => hostname === 'tistory.com' || hostname.endsWith('.tistory.com'),
+  ...Object.fromEntries(Object.entries(SOCIAL_HOSTS).map(([channel, hosts]) => [channel, hostname => hosts.includes(hostname)]))
 };
 export function edgeCdpEndpoint(value) {
   if (value === 'msedge') return value;
@@ -116,6 +119,8 @@ export async function fillEditorPage(page, mapping, job) {
 }
 
 export async function fillNativeEditorPage(page, job) {
+  // X, LinkedIn, Instagram, Reddit: fill the composer only; the user presses the platform's post button.
+  if (isSocialChannel(job.channel)) return stage('작성 창 입력', page, () => fillSocialComposer(page, job));
   if (job.channel === 'tistory') {
     await stage('편집기 확인', page, async () => {
       if (new URL(page.url()).hostname !== `${job.accountHandle}.tistory.com` || !page.url().includes('/manage/newpost')) throw new Error('Tistory editor account mismatch');
@@ -458,8 +463,9 @@ export async function openEditor(job, editorUrl, mapping = null) {
     const loginMessage = attached ? 'Sign in in the connected browser tab, then resume preparation' : 'Sign in in the opened PostGen Edge profile, then resume preparation';
     if (job.channel === 'naver' && !(await waitForNaverEditor(page, job.accountHandle, 5000))) return { sessionId, loginRequired: true, message: loginMessage };
     if (!allowed(new URL(page.url()).hostname)) return { sessionId, loginRequired: true, message: loginMessage };
+    if (isSocialChannel(job.channel) && !(await socialSignedIn(page, job.channel))) return { sessionId, loginRequired: true, message: loginMessage };
     const editor = mapping ? await fillEditorPage(page, mapping, job) : await fillNativeEditorPage(page, job);
-    if (!mapping && job.draft.images.length) sessions.get(sessionId).imageSources = await nativeImageSources(page, job.channel);
+    if (!mapping && job.draft.images.length && !isSocialChannel(job.channel)) sessions.get(sessionId).imageSources = await nativeImageSources(page, job.channel);
     if (!mapping) { sessions.get(sessionId).approvedBody = job.draft.body; sessions.get(sessionId).approvedHeadings = job.draft.headings || []; }
     return { sessionId, editor };
   } catch (error) { if (sessionId) sessions.delete(sessionId); if (!attached) await context.close(); throw error; }
@@ -471,8 +477,9 @@ export async function resumeEditorSession(sessionId, job) {
   const naverReady = job.channel === 'naver' && await waitForNaverEditor(session.page, job.accountHandle, 5000);
   if (!naverReady) await session.page.goto(session.editorUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   if (job.channel === 'naver' && !(await waitForNaverEditor(session.page, job.accountHandle))) throw new Error('Naver editor did not open for the approved account');
+  if (isSocialChannel(job.channel) && !(await socialSignedIn(session.page, job.channel))) throw new Error('Sign in to this channel in the posting Chrome, then resume preparation');
   const editor = session.mapping ? await fillEditorPage(session.page, session.mapping, job) : await fillNativeEditorPage(session.page, job);
-  if (!session.mapping && job.draft.images.length) session.imageSources = await nativeImageSources(session.page, job.channel);
+  if (!session.mapping && job.draft.images.length && !isSocialChannel(job.channel)) session.imageSources = await nativeImageSources(session.page, job.channel);
   if (!session.mapping) { session.approvedBody = job.draft.body; session.approvedHeadings = job.draft.headings || []; }
   return { sessionId, editor };
 }

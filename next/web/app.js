@@ -43,9 +43,10 @@ function channelName(jobId) {
 }
 // Approve the draft with its images, reserve it at the given time and start entering it into the editor.
 async function publishJob(job, timeValue) {
-  const parsed = new Date(timeValue); if (!timeValue || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
-  if (parsed.getTime() % (10 * 60_000) !== 0) throw new Error('공개 시각은 10분 단위로 지정하세요.');
-  const at = parsed.toISOString();
+  const social = isSocialJob(job);
+  const parsed = new Date(timeValue); if (!social && (!timeValue || Number.isNaN(parsed.getTime()))) throw new Error('공개 시각을 지정하세요.');
+  if (!social && parsed.getTime() % (10 * 60_000) !== 0) throw new Error('공개 시각은 10분 단위로 지정하세요.');
+  const at = social ? null : parsed.toISOString();
   const standardUnverifiedAcknowledged = job.status === 'draft' && !hasDraftStandard(job) ? await confirmUnverifiedStandard() : false;
   if (job.status === 'draft' && !hasDraftStandard(job) && !standardUnverifiedAcknowledged) return false;
   await api(job.status === 'draft' ? '/api/publish-reservation' : '/api/schedule', { jobId: job.id, at, conflictAcknowledged: conflictChecks.has(job.id), standardUnverifiedAcknowledged });
@@ -63,7 +64,7 @@ async function publishChecked(jobs) {
     else ready.push(job);
   }
   if (!ready.length) throw new Error(`발행할 수 있는 채널이 없습니다.\n${skipped.join('\n')}`);
-  const plan = ready.map(job => `${channelName(job.id)} · ${(scheduleInputs.get(job.id) || defaultPublishTime()).replace('T', ' ')}`);
+  const plan = ready.map(job => `${channelName(job.id)} · ${isSocialJob(job) ? '작성 창만 채움 (게시는 직접)' : (scheduleInputs.get(job.id) || defaultPublishTime()).replace('T', ' ')}`);
   if (!confirm(`다음 채널을 차례로 발행(예약 등록)합니다.\n${plan.join('\n')}${skipped.length ? `\n\n제외:\n${skipped.join('\n')}` : ''}`)) return;
   const failures = [];
   for (const job of ready) {
@@ -87,7 +88,11 @@ function usageText(entries) {
   const limit = subscription ? ` · 구독 한도 5시간 ${subscription.fiveHour?.usedPercent ?? '확인 불가'}% / 7일 ${subscription.sevenDay?.usedPercent ?? '확인 불가'}%` : ' · 구독 한도 확인 불가';
   return `호출 ${unique.length}회 · 확인된 입력 ${input.toLocaleString('ko-KR')} / 출력 ${output.toLocaleString('ko-KR')} 토큰${known.length < unique.length ? ' · 일부 사용량 확인 불가' : ''}${limit}`;
 }
-const channelLabels = { naver: '네이버 블로그', tistory: '티스토리', x: 'X', threads: 'Threads' };
+const channelLabels = { naver: '네이버 블로그', tistory: '티스토리', x: 'X', linkedin: '링크드인', instagram: '인스타그램', reddit: '레딧', threads: 'Threads' };
+// X, LinkedIn, Instagram, Reddit: PostGen fills the composer; the user presses the platform's post button.
+const SOCIAL_CHANNELS = ['x', 'linkedin', 'instagram', 'reddit'];
+const channelOf = job => cache.registry.accounts.find(item => item.id === job.accountId)?.channel;
+const isSocialJob = job => SOCIAL_CHANNELS.includes(channelOf(job));
 function excerpt(value, max = 140) { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; }
 function localDateTime(date) { const pad = value => String(value).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`; }
 async function api(path, data) {
@@ -161,8 +166,9 @@ async function registerBrowser(jobId, sessionId) {
 async function preparedBrowser(jobId, output) {
   sessionStorage.setItem(`editor:${jobId}`, output.sessionId);
   if (output.loginRequired) return say(output.message?.includes('connected browser') ? '연결된 브라우저(포스팅용 크롬) 탭에서 직접 로그인한 뒤 이 화면의 “로그인 후 재개”를 누르세요.' : 'PostGen 전용 Edge 창에서 직접 로그인한 뒤 이 화면의 “로그인 후 재개”를 누르세요.');
-  const status = output.state.jobs.find(item => item.id === jobId)?.status;
-  if (status === 'ready_to_register') return registerBrowser(jobId, output.sessionId);
+  const job = output.state.jobs.find(item => item.id === jobId);
+  if (job?.status === 'ready_to_register' && isSocialJob(job)) return say(`${channelName(jobId)} 작성 창에 글${job.draft.images.length ? '과 이미지' : ''}를 채웠습니다. 포스팅용 크롬에서 내용을 확인하고 게시 버튼을 직접 누른 뒤, 이 화면에서 '게시 완료 표시'를 눌러 주세요.${job.editor?.accountVerified === false ? ' 이 채널은 로그인한 계정을 자동으로 확인하지 못했으니 계정도 확인해 주세요.' : ''}`, 120_000);
+  if (job?.status === 'ready_to_register') return registerBrowser(jobId, output.sessionId);
   say('편집기 내용이 승인본과 달라 재검토가 필요합니다.');
 }
 function writtenAt(job) {
@@ -518,18 +524,28 @@ async function refresh() {
     if (job.draft && ['draft','approved'].includes(job.status)) {
       const panel = document.createElement('section'); panel.className = 'publish-panel';
       const title = document.createElement('h4'); title.textContent = '발행'; panel.append(title);
-      const note = document.createElement('p'); note.textContent = `${account?.handle || job.accountHandle} · 이미지 ${job.draft.images.length}장 · 발행을 누르면 표시된 글과 이미지를 함께 승인하고 지정 시각 예약 등록을 시작합니다.`; panel.append(note);
+      const social = SOCIAL_CHANNELS.includes(account?.channel);
+      const note = document.createElement('p'); note.textContent = social ? `${account?.handle || job.accountHandle} · 이미지 ${job.draft.images.length}장 · 누르면 글을 승인하고 포스팅용 크롬에서 ${channelLabels[account.channel]} 작성 창을 채웁니다. 게시 버튼은 직접 누릅니다(플랫폼 약관상 자동 게시를 하지 않습니다).` : `${account?.handle || job.accountHandle} · 이미지 ${job.draft.images.length}장 · 발행을 누르면 표시된 글과 이미지를 함께 승인하고 지정 시각 예약 등록을 시작합니다.`; panel.append(note);
       const row = document.createElement('div'); row.className = 'publish-row';
       if (!scheduleInputs.has(job.id)) scheduleInputs.set(job.id, defaultPublishTime());
       const time = document.createElement('input'); time.type = 'datetime-local'; time.step = '600'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id); time.oninput = () => scheduleInputs.set(job.id, time.value);
       const missing = missingImages(job);
-      const publish = button('발행', async () => { await publishJob(job, time.value); }, () => missing > 0 ? `이미지 ${missing}장을 아직 만들지 않아 발행할 수 없습니다. 이미지를 만들거나 제안을 제외하세요.` : null);
-      row.append(time);
+      const publish = button(social ? '작성 창 채우기' : '발행', async () => { await publishJob(job, time.value); }, () => missing > 0 ? `이미지 ${missing}장을 아직 만들지 않아 발행할 수 없습니다. 이미지를 만들거나 제안을 제외하세요.` : null);
+      if (!social) row.append(time);
       if (job.status === 'draft' && missing) row.append(button('이미지 만들기', async () => { await generateImagesFor([job.id]); }));
       row.append(publish); panel.append(row);
       const hint = document.createElement('p'); hint.textContent = missing ? `이미지 ${missing}장을 먼저 만드세요.` : !hasDraftStandard(job) ? '지침 적용 기록이 없어 발행 시 확인 다이얼로그가 열립니다.' : '이미지마다 승인할 필요 없이 발행 한 번으로 진행합니다.'; panel.append(hint);
       if (job.diagnostics?.some(item => item.code === 'source_conflict')) { const label = document.createElement('label'); const conflict = document.createElement('input'); conflict.type = 'checkbox'; conflict.checked = conflictChecks.has(job.id); conflict.onchange = () => conflict.checked ? conflictChecks.add(job.id) : conflictChecks.delete(job.id); label.append(conflict, ' 출처 충돌을 확인했습니다'); panel.append(label); }
       article.append(panel);
+    }
+    if (SOCIAL_CHANNELS.includes(account?.channel) && job.status === 'ready_to_register') {
+      const panel = document.createElement('section'); panel.className = 'publish-panel';
+      const title = document.createElement('h4'); title.textContent = '직접 게시'; panel.append(title);
+      const note = document.createElement('p'); note.textContent = `포스팅용 크롬의 ${channelLabels[account.channel]} 작성 창에 승인된 글${job.draft.images.length ? '과 이미지' : ''}를 채웠습니다. 내용${job.editor?.accountVerified === false ? '과 로그인한 계정' : ''}을 확인하고 게시 버튼을 직접 누른 뒤 아래 버튼을 눌러 주세요.`; panel.append(note);
+      const row = document.createElement('div'); row.className = 'publish-row';
+      row.append(button('게시 완료 표시', async () => { await api('/api/publication/manual', { jobId: job.id }); say(`${channelName(job.id)} 게시 완료로 표시했습니다.`); }));
+      row.append(button('작성 창 다시 채우기', async () => { await api('/api/publication/republish', { jobId: job.id, platformChecked: false }); await api('/api/start', { jobId: job.id }); await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id })); }));
+      panel.append(row); article.append(panel);
     }
     const advanced = document.createElement('details'); advanced.className = 'advanced-actions';
     const advancedLabel = document.createElement('summary'); advancedLabel.textContent = '글·이미지 편집 옵션'; advanced.append(advancedLabel);
