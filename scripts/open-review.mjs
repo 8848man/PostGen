@@ -38,8 +38,39 @@ export function checkoutLag(root = projectRoot, runGit = spawnSync) {
   return Number.isSafeInteger(count) && count > 0 ? count : 0;
 }
 
+export function fetchOrigin(root = projectRoot, runGit = spawnSync, files = fs, now = () => new Date()) {
+  const gitPath = name => {
+    try {
+      const result = runGit('git', ['-C', root, 'rev-parse', '--git-path', name], { encoding: 'utf8', windowsHide: true, timeout: 3000 });
+      return result.status === 0 && result.stdout.trim() ? path.resolve(root, result.stdout.trim()) : null;
+    } catch { return null; }
+  };
+  const marker = gitPath('postgen-last-fetch');
+  let lastFetchAt = null;
+  if (marker) {
+    try { lastFetchAt = files.readFileSync(marker, 'utf8').trim() || null; } catch {}
+  }
+  if (!lastFetchAt) {
+    const fetchHead = gitPath('FETCH_HEAD');
+    try { if (fetchHead) lastFetchAt = files.statSync(fetchHead).mtime.toISOString(); } catch {}
+  }
+  try {
+    const result = runGit('git', ['-C', root, 'fetch', '--quiet', 'origin'], {
+      encoding: 'utf8', windowsHide: true, timeout: 8000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    });
+    if (result.status !== 0) return { ok: false, lastFetchAt };
+    if (marker) {
+      try { files.writeFileSync(marker, now().toISOString()); } catch {}
+    }
+    return { ok: true, lastFetchAt };
+  } catch { return { ok: false, lastFetchAt }; }
+}
+
 export function startReview({ noBrowser = false, root = projectRoot, env = process.env } = {}) {
   const appRoot = resolveAppRoot(root);
+  const fetch = fetchOrigin(appRoot);
+  if (!fetch.ok) console.warn(`Could not fetch origin; the local origin/master may be out of date. Last successful fetch: ${fetch.lastFetchAt || 'unknown'}.`);
   const behind = checkoutLag(appRoot);
   if (behind) console.warn(`PostGen code is ${behind} commit(s) behind origin/master. Update this checkout to use the latest review screen.`);
   const dataDir = resolveDataDir(env);

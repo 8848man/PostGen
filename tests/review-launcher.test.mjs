@@ -4,7 +4,40 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { checkoutLag, resolveAppRoot, resolveDataDir } from '../scripts/open-review.mjs';
+import { checkoutLag, fetchOrigin, resolveAppRoot, resolveDataDir } from '../scripts/open-review.mjs';
+
+test('launcher fetches origin and records the successful fetch time', () => {
+  const writes = [];
+  const git = (command, args, options) => {
+    assert.equal(command, 'git');
+    if (args[2] === 'rev-parse') return { status: 0, stdout: `/tmp/${args[4]}\n` };
+    assert.deepEqual(args, ['-C', 'checkout', 'fetch', '--quiet', 'origin']);
+    assert.equal(options.timeout, 8000);
+    assert.equal(options.env.GIT_TERMINAL_PROMPT, '0');
+    return { status: 0 };
+  };
+  const files = {
+    readFileSync: () => '2026-11-25T10:00:00.000Z',
+    writeFileSync: (...args) => writes.push(args)
+  };
+  assert.deepEqual(fetchOrigin('checkout', git, files, () => new Date('2026-11-27T10:00:00Z')), {
+    ok: true, lastFetchAt: '2026-11-25T10:00:00.000Z'
+  });
+  assert.deepEqual(writes, [[path.resolve('/tmp/postgen-last-fetch'), '2026-11-27T10:00:00.000Z']]);
+});
+
+test('launcher keeps the previous fetch time when origin fetch fails', () => {
+  const git = (_command, args) => args[2] === 'rev-parse'
+    ? { status: 0, stdout: `/tmp/${args[4]}\n` }
+    : { status: 128 };
+  const files = {
+    readFileSync: () => '2026-11-25T10:00:00.000Z',
+    writeFileSync: () => assert.fail('failed fetch must not update the timestamp')
+  };
+  assert.deepEqual(fetchOrigin('checkout', git, files), {
+    ok: false, lastFetchAt: '2026-11-25T10:00:00.000Z'
+  });
+});
 
 test('launcher warns only when origin/master has commits missing from this checkout', () => {
   const git = (command, args, options) => {
