@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "test:smoke": "npm run test:browser && npm run test:review && npm run test:server && node tests/image-placement-dashboard-smoke.mjs && node tests/button-reasons-dashboard-smoke.mjs && node tests/batch-archive-dashboard-smoke.mjs && node tests/browser-dialogs-smoke.mjs",
+    "test:smoke": "npm run test:browser && npm run test:review && npm run test:server && node tests/image-placement-dashboard-smoke.mjs && node tests/button-reasons-dashboard-smoke.mjs && node tests/batch-archive-dashboard-smoke.mjs && node tests/browser-dialogs-smoke.mjs && node tests/social-composer-smoke.mjs && node tests/social-dashboard-smoke.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
     "test:review": "node tests/review-dashboard-smoke.mjs",
     "test:server": "node tests/next-server-smoke.mjs",

@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { dataDir } from './profile.mjs';
 
-const CHANNELS = new Set(['naver', 'tistory', 'x', 'threads']);
+const CHANNELS = new Set(['naver', 'tistory', 'x', 'linkedin', 'instagram', 'reddit', 'threads']);
 const SOURCE_TYPES = new Set(['text', 'file', 'url', 'screenshot']);
 const RIGHTS = new Set(['owned', 'licensed', 'public_style']);
 const PRIORITIES = new Set(['required', 'preferred']);

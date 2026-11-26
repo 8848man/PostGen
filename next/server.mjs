@@ -22,6 +22,7 @@ import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReser
 import { loadSettings, updateSettings } from './settings.mjs';
 import { codexModelOptions } from './codex-models.mjs';
 import { generateJobDraft } from './draft-job.mjs';
+import { isSocialChannel, SOCIAL_CHANNELS } from '../skill/postgen/scripts/channel-rules.mjs';
 import { averageImageMs, recordImageDuration } from './image-timing.mjs';
 
 const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web');
@@ -95,7 +96,7 @@ function activitySubject(input) {
   return { jobId, imageId, title, detail };
 }
 function postingAccounts() {
-  return loadRegistry().accounts.filter(account => ['naver', 'tistory'].includes(account.channel)).map(account => {
+  return loadRegistry().accounts.filter(account => ['naver', 'tistory', ...SOCIAL_CHANNELS].includes(account.channel)).map(account => {
     try { return { accountId: account.id, postingUrl: postingUrlFor(account), custom: Boolean(account.postingUrl) }; }
     catch (error) { return { accountId: account.id, postingUrl: null, custom: false, error: error.message }; }
   });
@@ -324,7 +325,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/images/accept-check') return json(res, 200, { state: mutateState(current => acceptImageCheck(current, input.jobId, input.imageId)) });
     if (url.pathname === '/api/approve') return json(res, 200, { state: mutateState(current => approveDraft(current, input.jobId, { conflictAcknowledged: input.conflictAcknowledged === true })) });
-    if (url.pathname === '/api/publish-reservation') return json(res, 200, { state: mutateState(current => publishDraftReservation(current, input.jobId, input.at, { conflictAcknowledged: input.conflictAcknowledged === true, standardUnverifiedAcknowledged: input.standardUnverifiedAcknowledged === true })) });
+    if (url.pathname === '/api/publish-reservation') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      const channel = loadRegistry().accounts.find(item => item.id === job?.accountId)?.channel || null;
+      return json(res, 200, { state: mutateState(current => publishDraftReservation(current, input.jobId, input.at, { conflictAcknowledged: input.conflictAcknowledged === true, standardUnverifiedAcknowledged: input.standardUnverifiedAcknowledged === true, channel })) });
+    }
     if (url.pathname === '/api/draft/review') return json(res, 200, { state: mutateState(current => reviewDraft(current, input.jobId, input.decision, input.note)) });
     if (url.pathname === '/api/schedule') return json(res, 200, { state: mutateState(current => scheduleJob(current, input.jobId, input.at)) });
     if (url.pathname === '/api/reschedule') return json(res, 200, { state: mutateState(current => rescheduleExpired(current, input.jobId, input.at, { factsAndLinksReviewed: input.factsAndLinksReviewed === true })) });
@@ -355,7 +360,11 @@ const server = http.createServer(async (req, res) => {
       const state = mutateState(current => reviewPreparation(current, job.id, result.editor));
       return json(res, 200, { ...result, state });
     }
-    if (url.pathname === '/api/registration/browser') return json(res, 200, await registerBrowserReservation(input.jobId, input.sessionId));
+    if (url.pathname === '/api/registration/browser') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      if (isSocialChannel(loadRegistry().accounts.find(item => item.id === job?.accountId)?.channel)) throw new Error('This channel is posted by the user from the filled composer; mark it published after posting');
+      return json(res, 200, await registerBrowserReservation(input.jobId, input.sessionId));
+    }
     if (url.pathname === '/api/registration/recheck') {
       const job = loadState().jobs.find(item => item.id === input.jobId);
       const account = loadRegistry().accounts.find(item => item.id === job?.accountId);
@@ -369,6 +378,7 @@ const server = http.createServer(async (req, res) => {
       if (job?.status !== 'ready_to_register' || !connector) throw new Error('Approved MCP reservation is not ready');
       const account = loadRegistry().accounts.find(item => item.id === job.accountId);
       if (tagsNeedBrowser(account?.channel, job.draft.tags)) throw new Error('Blog posts with tags require browser registration to verify tags before publishing');
+      if (isSocialChannel(account?.channel)) throw new Error('This channel is posted by the user from the filled composer');
       mutateState(current => beginScheduleSubmission(current, job.id));
       try {
         const result = await registerScheduledWithMcp(connector, input.toolName, job);
@@ -385,7 +395,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/publication/implicit/undo') return json(res, 200, { state: mutateState(current => declineImplicitPublication(current, input.jobId)) });
     if (url.pathname === '/api/publication/manual/undo') return json(res, 200, { state: mutateState(current => unmarkManualPublication(current, input.jobId)) });
     if (url.pathname === '/api/cancel') return json(res, 200, { state: mutateState(current => cancelJob(current, input.jobId)) });
-    if (url.pathname === '/api/publication/republish') return json(res, 200, { state: mutateState(current => republishJob(current, input.jobId, input.at, { platformChecked: input.platformChecked === true })) });
+    if (url.pathname === '/api/publication/republish') {
+      const job = loadState().jobs.find(item => item.id === input.jobId);
+      const channel = loadRegistry().accounts.find(item => item.id === job?.accountId)?.channel || null;
+      return json(res, 200, { state: mutateState(current => republishJob(current, input.jobId, input.at, { platformChecked: input.platformChecked === true, channel })) });
+    }
     if (url.pathname === '/api/publication/retry') return json(res, 200, { state: mutateState(current => retryPublication(current, input.jobId)) });
     return json(res, 404, { error: 'Not found' });
   } catch (error) { return json(res, 400, { error: String(error.message || error).slice(0, 500) }); }

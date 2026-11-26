@@ -32,7 +32,7 @@ test('login state follows the responses seen on 2026-11-25', () => {
 
 test('login check reports unknown instead of failing when the posting Chrome is not reachable', async () => {
   const statuses = await checkLoginStatus([tistory, naver, { id: 'x', channel: 'x', handle: 'h' }], { endpoint: null });
-  assert.deepEqual(statuses.map(status => [status.accountId, status.state]), [['t', 'unknown'], ['n', 'unknown']]);
+  assert.deepEqual(statuses.map(status => [status.accountId, status.state]), [['t', 'unknown'], ['n', 'unknown'], ['x', 'unknown']]);
   assert.match(statuses[0].reason, /review launcher/);
   const failing = await checkLoginStatus([tistory], { endpoint: 'http://127.0.0.1:1', connect: async () => { throw new Error('connect refused'); } });
   assert.equal(failing[0].reason, 'connect refused');

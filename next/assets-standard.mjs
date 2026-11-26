@@ -6,11 +6,13 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 
 // Tistory has its own set since 2026-11-25 (polite informational tone; N-026). Environment variables override either.
-const DEFAULT_SETS = { naver: 'naver-blog-post', tistory: 'tistory-blog-post' };
-const CHANNEL_LABELS = { naver: '네이버', tistory: '티스토리' };
+// Social channels have their own sets (drafts created 2026-11-26 for review in Assets Manager).
+const DEFAULT_SETS = { naver: 'naver-blog-post', tistory: 'tistory-blog-post', x: 'x-post', linkedin: 'linkedin-post', instagram: 'instagram-post', reddit: 'reddit-post' };
+const CHANNEL_LABELS = { naver: '네이버', tistory: '티스토리', x: 'X', linkedin: '링크드인', instagram: '인스타그램', reddit: '레딧' };
 
 // The task line sent to the library; generation and evaluation must send the same one for the same draft.
 export function standardTask(channel, topic) {
+  if (['x', 'linkedin', 'instagram', 'reddit'].includes(channel)) return `${CHANNEL_LABELS[channel]} 게시물: ${topic}`;
   return `${CHANNEL_LABELS[channel] || channel} 블로그 포스트: ${topic}`;
 }
 
