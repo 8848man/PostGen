@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -29,8 +29,19 @@ export function resolveDataDir(env = process.env, home = os.homedir()) {
   return null;
 }
 
+export function checkoutLag(root = projectRoot, runGit = spawnSync) {
+  const result = runGit('git', ['-C', root, 'rev-list', '--count', 'HEAD..origin/master'], {
+    encoding: 'utf8', windowsHide: true, timeout: 3000
+  });
+  if (result.status !== 0) return 0;
+  const count = Number(result.stdout.trim());
+  return Number.isSafeInteger(count) && count > 0 ? count : 0;
+}
+
 export function startReview({ noBrowser = false, root = projectRoot, env = process.env } = {}) {
   const appRoot = resolveAppRoot(root);
+  const behind = checkoutLag(appRoot);
+  if (behind) console.warn(`PostGen code is ${behind} commit(s) behind origin/master. Update this checkout to use the latest review screen.`);
   const dataDir = resolveDataDir(env);
   const childEnv = { ...env, ...(dataDir ? { POSTGEN_DATA_DIR: dataDir } : {}), POSTGEN_BROWSER_CDP_ENDPOINT: 'http://127.0.0.1:9333' };
   const server = spawn(process.execPath, [path.join(appRoot, 'next', 'server.mjs')], { cwd: appRoot, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });

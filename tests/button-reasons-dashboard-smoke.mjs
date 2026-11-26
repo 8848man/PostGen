@@ -51,6 +51,7 @@ try {
   async function openJob(id) { await page.goto(`${launch}&job=${id}`); await page.reload(); await page.getByRole('button', { name: '발행', exact: true }).waitFor(); }
   await openJob(ids[0]);
   const publish = page.getByRole('button', { name: '발행', exact: true });
+  const firstPublishButton = await publish.elementHandle();
   assert.equal(await publish.isEnabled(), true);
   await page.route('**/api/start', route => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }));
   await page.route('**/api/prepare-browser', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ sessionId: 'test', loginRequired: true, message: 'Test browser handoff' }) }));
@@ -58,6 +59,7 @@ try {
   const warning = page.getByRole('dialog', { name: '표준 확인' });
   await warning.getByText('표준 확인이 안된 글입니다. 발행하시겠습니까?').waitFor();
   await warning.getByRole('button', { name: '취소' }).click();
+  await firstPublishButton.waitForElementState('hidden');
   assert.equal(publishRequests, 0);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'next', 'jobs.json'), 'utf8')).jobs.find(job => job.id === ids[0]).status, 'draft');
   await publish.click();
@@ -80,11 +82,20 @@ try {
   await page.getByRole('status').getByText('생성 시도 한도 3회에 도달했습니다.', { exact: false }).waitFor();
   assert.equal(regenerationRequests, 0);
   let releasePublish;
-  await page.route('**/api/publish-reservation', route => { releasePublish = () => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }); });
+  let confirmPublishHeld;
+  const publishHeld = new Promise(resolve => { confirmPublishHeld = resolve; });
+  await page.route('**/api/publish-reservation', route => {
+    releasePublish = () => route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    confirmPublishHeld();
+  });
   const busyPublish = page.getByRole('button', { name: '발행', exact: true });
-  const pendingRequest = page.waitForRequest(request => request.url().endsWith('/api/publish-reservation'));
   await busyPublish.click();
-  await pendingRequest;
+  let heldTimer;
+  try {
+    await Promise.race([publishHeld, new Promise((_, reject) => {
+      heldTimer = setTimeout(() => reject(new Error('Publish request was not held')), 30_000);
+    })]);
+  } finally { clearTimeout(heldTimer); }
   assert.equal(await busyPublish.isEnabled(), true);
   await busyPublish.click();
   await page.getByRole('status').getByText('발행 작업이 진행 중입니다.', { exact: false }).waitFor();
