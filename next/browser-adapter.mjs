@@ -376,8 +376,31 @@ export async function uploadTistoryImages(page, images, expectedBlocks = null) {
     const paragraphs = frame.locator(blockSelector).filter({ hasText: /\S/ });
     if (await paragraphs.count() < image.afterParagraph) throw new Error('Tistory target paragraph unavailable');
     const before = new Set(await frame.locator('#tinymce img').evaluateAll(elements => elements.map(element => element.getAttribute('src'))));
-    await paragraphs.nth(image.afterParagraph - 1).click();
-    await page.keyboard.press('End');
+    const target = paragraphs.nth(image.afterParagraph - 1);
+    // A real click just past the last character of the last line (as for Naver), then the caret is set explicitly.
+    const endPoint = await target.evaluate(node => {
+      const range = node.ownerDocument.createRange();
+      range.selectNodeContents(node);
+      const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+      const last = rects.at(-1), box = node.getBoundingClientRect();
+      return last ? { x: Math.max(1, Math.min(last.right - box.left + 2, box.width - 1)), y: last.top + last.height / 2 - box.top } : null;
+    });
+    await target.click(endPoint ? { position: endPoint } : undefined);
+    // The editor inserts the image at the caret. A long paragraph wraps, so End only reached the end of the clicked
+    // line and the image split the paragraph. Put the caret at the very end of the block instead: through TinyMCE's
+    // own selection when the page has it (it keeps that selection while the toolbar is used), otherwise a DOM range.
+    const placed = await target.evaluate(element => {
+      const editor = element.ownerDocument.defaultView.parent?.tinymce?.activeEditor;
+      if (editor?.selection && editor.getBody?.()?.contains(element)) { editor.selection.select(element, true); editor.selection.collapse(false); return true; }
+      const range = element.ownerDocument.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      const selection = element.ownerDocument.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return selection.rangeCount === 1;
+    });
+    if (!placed) throw new Error('Tistory caret could not be placed at the end of the target paragraph');
     await page.locator('#mceu_0-open').click();
     const chooser = page.waitForEvent('filechooser', { timeout: 10_000 });
     await page.locator('#attach-image').click();
@@ -393,7 +416,15 @@ export async function uploadTistoryImages(page, images, expectedBlocks = null) {
       const imageNode = elements.find(element => element.getAttribute('src') === args.source);
       const paragraphs = [...document.querySelectorAll(args.blockSelector)].filter(element => element.textContent.trim());
       const before = paragraphs[args.afterParagraph - 1], after = paragraphs[args.afterParagraph];
-      return !!imageNode && !!before && Boolean(before.compareDocumentPosition(imageNode) & Node.DOCUMENT_POSITION_FOLLOWING) && (!after || Boolean(imageNode.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING));
+      if (!imageNode || !before) return false;
+      // An image inside the target block counts only at its end: text after it means the paragraph was split.
+      if (before.contains(imageNode)) {
+        const rest = imageNode.ownerDocument.createRange();
+        rest.setStartAfter(imageNode);
+        rest.setEnd(before, before.childNodes.length);
+        if (rest.toString().trim()) return false;
+      } else if (!(before.compareDocumentPosition(imageNode) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+      return !after || Boolean(imageNode.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING);
     }, { source: newSources[0], afterParagraph: image.afterParagraph, blockSelector });
     if (!position) throw new Error('Tistory image is outside its approved paragraph position');
     uploaded.push(image.id);
