@@ -36,4 +36,14 @@ test('headings repeated by the table of contents are kept and Tistory prompt exp
   assert.deepEqual(result.draft.headings, ['1. 첫째', '2. 둘째']);
   assert.ok(!result.diagnostics.some(item => item.code === 'heading_mismatch'));
   assert.match(prompt, /Tistory formatting is applied/);
+  assert.match(prompt, /one line per big subheading/);
+  assert.doesNotMatch(prompt, /one line per listed subheading/);
+});
+
+test('Tistory table of contents with only big subheadings keeps small subheadings as headings', async () => {
+  const body = '도입\n목차\n1. 첫째\n2. 둘째\n1. 첫째\n① 작은 항목\n본문\n2. 둘째\n본문';
+  const headings = ['1. 첫째', '① 작은 항목', '2. 둘째'];
+  const result = await generateDraft({ ...input, account: { channel: 'tistory', handle: 'me' } }, {}, async () => ({ result: { title: '제목', tags: [], body, headings, claims: [], images: [], diagnostics: [] } }));
+  assert.deepEqual(result.draft.headings, headings);
+  assert.ok(!result.diagnostics.some(item => item.code === 'heading_mismatch'));
 });
