@@ -4,7 +4,19 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { resolveAppRoot, resolveDataDir } from '../scripts/open-review.mjs';
+import { checkoutLag, resolveAppRoot, resolveDataDir } from '../scripts/open-review.mjs';
+
+test('launcher warns only when origin/master has commits missing from this checkout', () => {
+  const git = (command, args, options) => {
+    assert.equal(command, 'git');
+    assert.deepEqual(args, ['-C', 'checkout', 'rev-list', '--count', 'HEAD..origin/master']);
+    assert.equal(options.timeout, 3000);
+    return { status: 0, stdout: '3\n' };
+  };
+  assert.equal(checkoutLag('checkout', git), 3);
+  assert.equal(checkoutLag('checkout', () => ({ status: 0, stdout: '0\n' })), 0);
+  assert.equal(checkoutLag('checkout', () => ({ status: 128, stdout: '' })), 0);
+});
 
 test('launcher uses only this checkout and never falls back to a worktree or an older screen', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'postgen-launch-path-'));
