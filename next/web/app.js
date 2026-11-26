@@ -5,6 +5,59 @@ let cache;
 let selectedCampaignId = null;
 let selectedJobId = hashParams.get('job');
 const scheduleInputs = new Map();
+const conflictChecks = new Set();
+const checkedChannels = new Set();
+const ARCHIVE_AFTER_DAYS = 14;
+const VISIBLE_SOURCES = 5;
+let averageImageMs = 90_000;
+const missingImages = job => (job.draft?.images || []).filter(image => !image.generatedPath && !image.pendingPath).length;
+function defaultPublishTime() { const value = new Date(Date.now() + 24 * 60 * 60 * 1000); value.setSeconds(0, 0); value.setMinutes(Math.ceil(value.getMinutes() / 10) * 10); return localDateTime(value); }
+// Make every missing image of the given channels in one server request, so the activity button can show n/m progress.
+async function generateImagesFor(jobIds) {
+  say(`이미지를 생성합니다. 진행 상황은 오른쪽 아래 작업 버튼에서 볼 수 있습니다.`, 300_000);
+  const { results, total } = await api('/api/images/generate-batch', { jobIds });
+  await refresh();
+  const made = results.reduce((sum, entry) => sum + entry.generated, 0);
+  const failed = results.filter(entry => entry.error);
+  say(failed.length ? `이미지 ${made}/${total}장을 만들었습니다. 실패: ${failed.map(entry => `${channelName(entry.jobId)} (${entry.error})`).join(', ')}` : `이미지 ${made}장이 준비됐습니다. 확인한 뒤 발행하세요.`, 60_000);
+}
+function channelName(jobId) {
+  const job = cache.state.jobs.find(item => item.id === jobId);
+  const account = cache.registry.accounts.find(item => item.id === job?.accountId);
+  return `${channelLabels[account?.channel] || account?.channel || '채널'} ${account?.handle || job?.accountHandle || ''}`.trim();
+}
+// Approve the draft with its images, reserve it at the given time and start entering it into the editor.
+async function publishJob(job, timeValue) {
+  const parsed = new Date(timeValue); if (!timeValue || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
+  if (parsed.getTime() % (10 * 60_000) !== 0) throw new Error('공개 시각은 10분 단위로 지정하세요.');
+  const at = parsed.toISOString();
+  const standardUnverifiedAcknowledged = job.status === 'draft' && !hasDraftStandard(job) ? await confirmUnverifiedStandard() : false;
+  if (job.status === 'draft' && !hasDraftStandard(job) && !standardUnverifiedAcknowledged) return false;
+  await api(job.status === 'draft' ? '/api/publish-reservation' : '/api/schedule', { jobId: job.id, at, conflictAcknowledged: conflictChecks.has(job.id), standardUnverifiedAcknowledged });
+  await api('/api/start', { jobId: job.id });
+  await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
+  return true;
+}
+// Checked channels one after another: each uses the publish time set on its own card (default: tomorrow).
+async function publishChecked(jobs) {
+  const ready = [], skipped = [];
+  for (const job of jobs) {
+    if (!job.draft || !['draft','approved'].includes(job.status)) skipped.push(`${channelName(job.id)}: 발행할 초안이 아닙니다`);
+    else if (missingImages(job)) skipped.push(`${channelName(job.id)}: 이미지 ${missingImages(job)}장 미생성`);
+    else if (job.diagnostics?.some(item => item.code === 'source_conflict') && !conflictChecks.has(job.id)) skipped.push(`${channelName(job.id)}: 출처 충돌 확인 필요`);
+    else ready.push(job);
+  }
+  if (!ready.length) throw new Error(`발행할 수 있는 채널이 없습니다.\n${skipped.join('\n')}`);
+  const plan = ready.map(job => `${channelName(job.id)} · ${(scheduleInputs.get(job.id) || defaultPublishTime()).replace('T', ' ')}`);
+  if (!confirm(`다음 채널을 차례로 발행(예약 등록)합니다.\n${plan.join('\n')}${skipped.length ? `\n\n제외:\n${skipped.join('\n')}` : ''}`)) return;
+  const failures = [];
+  for (const job of ready) {
+    try { await publishJob(job, scheduleInputs.get(job.id) || defaultPublishTime()); }
+    catch (error) { failures.push(`${channelName(job.id)}: ${error.message}`); }
+  }
+  await refresh();
+  say(failures.length ? `일부 채널 발행에 실패했습니다.\n${failures.join('\n')}` : `${ready.length}개 채널 발행을 시작했습니다.`, 60_000);
+}
 function rememberSelection() { const params = new URLSearchParams({ token }); if (selectedJobId) params.set('job', selectedJobId); history.replaceState(null, '', `#${params}`); }
 const statusLabels = { selected: '원본 등록', draft: '초안 검토', approved: '승인됨', awaiting_registration: '예약 준비', preparing: '편집기 준비', review_required: '변경 재검토', ready_to_register: '등록 대기', submitting: '예약 등록 중', registered: '예약 등록됨', verification_due: '공개 확인 필요', published: '발행 확인됨', unknown: '등록 결과 불명확', expired: '예약 만료', cancelled: '취소됨', failed: '실패' };
 const hasDraftStandard = job => !!(job.draft?.standard?.set && /^[0-9a-f]{64}$/.test(job.draft.standard.sha256 || ''));
@@ -96,6 +149,59 @@ async function preparedBrowser(jobId, output) {
   const status = output.state.jobs.find(item => item.id === jobId)?.status;
   if (status === 'ready_to_register') return registerBrowser(jobId, output.sessionId);
   say('편집기 내용이 승인본과 달라 재검토가 필요합니다.');
+}
+function writtenAt(job) {
+  for (const source of job.sources || []) {
+    const match = String(source.ref || '').replaceAll('\\', '/').split('/').pop().match(/^(\d{4})-(\d{2})-(\d{2})(?!\d)/);
+    if (match) return `${match[1]}-${match[2]}-${match[3]}T00:00:00+09:00`;
+  }
+  return job.createdAt;
+}
+function campaignCard(key, group) {
+  const published = group.filter(job => job.status === 'published').length;
+  const scheduled = group.filter(job => scheduledStatuses.includes(job.status)).length;
+  const stage = published === group.length ? 'complete' : published + scheduled === group.length ? 'scheduled' : published || scheduled ? 'in-progress' : '';
+  const stageLabel = { complete: '✓ 모든 채널 발행 완료', scheduled: published ? '⏱ 남은 채널 예약 발행 등록됨' : '⏱ 예약 발행 등록됨', 'in-progress': published ? '◐ 일부 채널 발행 완료' : '◔ 일부 채널 예약 등록됨', '': '○ 발행 완료 전' }[stage];
+  const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card campaign-card ${stage} ${key === selectedCampaignId ? 'selected' : ''}`;
+  const source = group[0].sources[0];
+  const title = document.createElement('strong'); title.textContent = excerpt(source?.text || group[0].draft?.title || '원본 사본 만료', 55);
+  const meta = document.createElement('small'); meta.textContent = `${group.length}개 채널 글 · 원문 ${new Date(writtenAt(group[0])).toLocaleDateString('ko-KR')} · ${group[0].sources.length}개 출처`;
+  const progress = document.createElement('span'); progress.className = 'campaign-progress'; progress.textContent = `${stageLabel}${scheduled ? ` · 예약 ${scheduled}` : ''} · 발행 ${published}/${group.length}`;
+  item.append(title, meta, progress); item.onclick = () => { selectedCampaignId = key; selectedJobId = null; refresh().catch(error => say(error.message)); };
+  return item;
+}
+// Show the first `count` cards and scroll for the rest.
+function limitVisibleCards(list, count) {
+  list.classList.remove('scroll-limited'); list.style.maxHeight = '';
+  const cards = [...list.querySelectorAll(':scope > .pick-card')];
+  if (cards.length <= count) return;
+  requestAnimationFrame(() => {
+    const height = cards[count - 1].getBoundingClientRect().bottom - list.getBoundingClientRect().top;
+    if (height > 0) { list.style.maxHeight = `${Math.ceil(height) + 2}px`; list.classList.add('scroll-limited'); }
+  });
+}
+function channelBulkBar(group) {
+  const bar = document.createElement('div'); bar.className = 'channel-bulk';
+  const checked = () => group.filter(job => checkedChannels.has(job.id));
+  const all = document.createElement('label'); const allBox = document.createElement('input'); allBox.type = 'checkbox';
+  allBox.checked = group.every(job => checkedChannels.has(job.id)); allBox.indeterminate = !allBox.checked && group.some(job => checkedChannels.has(job.id));
+  allBox.onchange = () => { for (const job of group) allBox.checked ? checkedChannels.add(job.id) : checkedChannels.delete(job.id); refresh().catch(error => say(error.message)); };
+  all.append(allBox, ` 전체 선택 (${checked().length}/${group.length})`);
+  const images = button('선택 채널 이미지 생성', async () => {
+    const targets = checked().filter(job => job.status === 'draft' && missingImages(job));
+    if (!targets.length) throw new Error('이미지를 만들 채널이 없습니다. 이미지가 남은 초안 채널을 선택하세요.');
+    await generateImagesFor(targets.map(job => job.id));
+  }, () => checked().length ? null : '채널을 선택하세요.');
+  const publish = button('선택 채널 발행', async () => { await publishChecked(checked()); }, () => checked().length ? null : '채널을 선택하세요.');
+  bar.append(all, images, publish);
+  return bar;
+}
+function channelPick(job) {
+  const wrap = document.createElement('div'); wrap.className = 'channel-pick';
+  const box = document.createElement('input'); box.type = 'checkbox'; box.checked = checkedChannels.has(job.id); box.setAttribute('aria-label', `${channelName(job.id)} 선택`);
+  box.onchange = () => { box.checked ? checkedChannels.add(job.id) : checkedChannels.delete(job.id); refresh().catch(error => say(error.message)); };
+  wrap.append(box, channelCard(job));
+  return wrap;
 }
 function channelCard(job) {
   const account = cache.registry.accounts.find(item => item.id === job.accountId);
@@ -236,29 +342,40 @@ async function refresh() {
   const campaigns = new Map();
   for (const job of cache.state.jobs) { const key = job.campaignId || job.id; if (!campaigns.has(key)) campaigns.set(key, []); campaigns.get(key).push(job); }
   const sortedCampaigns = [...campaigns.entries()].sort((a, b) => Date.parse(b[1][0].createdAt) - Date.parse(a[1][0].createdAt));
+  // 창고: campaigns whose original was written more than 14 days ago (moved by the server) or moved by hand.
+  const archived = ([, group]) => group.some(job => job.archivedAt);
+  const activeCampaigns = sortedCampaigns.filter(entry => !archived(entry)), archivedCampaigns = sortedCampaigns.filter(archived);
   const rememberedJob = cache.state.jobs.find(job => job.id === selectedJobId);
   if (rememberedJob) selectedCampaignId = rememberedJob.campaignId || rememberedJob.id;
-  if (!campaigns.has(selectedCampaignId)) selectedCampaignId = sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft' && job.draft?.images?.length))?.[0] || sortedCampaigns.find(([, group]) => group.some(job => job.status === 'draft'))?.[0] || sortedCampaigns[0]?.[0] || null;
-  const campaignList = document.querySelector('#campaigns'); campaignList.replaceChildren();
-  for (const [key, group] of sortedCampaigns) {
-    const published = group.filter(job => job.status === 'published').length;
-    const scheduled = group.filter(job => scheduledStatuses.includes(job.status)).length;
-    const stage = published === group.length ? 'complete' : published + scheduled === group.length ? 'scheduled' : published || scheduled ? 'in-progress' : '';
-    const stageLabel = { complete: '✓ 모든 채널 발행 완료', scheduled: published ? '⏱ 남은 채널 예약 발행 등록됨' : '⏱ 예약 발행 등록됨', 'in-progress': published ? '◐ 일부 채널 발행 완료' : '◔ 일부 채널 예약 등록됨', '': '○ 발행 완료 전' }[stage];
-    const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card campaign-card ${stage} ${key === selectedCampaignId ? 'selected' : ''}`;
-    const source = group[0].sources[0];
-    const title = document.createElement('strong'); title.textContent = excerpt(source?.text || group[0].draft?.title || '원본 사본 만료', 55);
-    const meta = document.createElement('small'); meta.textContent = `${group.length}개 채널 글 · ${new Date(group[0].createdAt).toLocaleDateString('ko-KR')} · ${group[0].sources.length}개 출처`;
-    const progress = document.createElement('span'); progress.className = 'campaign-progress'; progress.textContent = `${stageLabel}${scheduled ? ` · 예약 ${scheduled}` : ''} · 발행 ${published}/${group.length}`;
-    item.append(title, meta, progress); item.onclick = () => { selectedCampaignId = key; selectedJobId = null; refresh().catch(error => say(error.message)); }; campaignList.append(item);
-  }
+  if (!campaigns.has(selectedCampaignId)) selectedCampaignId = activeCampaigns.find(([, group]) => group.some(job => job.status === 'draft' && job.draft?.images?.length))?.[0] || activeCampaigns.find(([, group]) => group.some(job => job.status === 'draft'))?.[0] || activeCampaigns[0]?.[0] || sortedCampaigns[0]?.[0] || null;
+  const campaignList = document.querySelector('#campaigns'); campaignList.replaceChildren(...activeCampaigns.map(([key, group]) => campaignCard(key, group)));
+  if (!activeCampaigns.length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = archivedCampaigns.length ? '진행 중인 원본이 없습니다. 지난 원본은 아래 창고에 있습니다.' : '등록된 원본이 없습니다.'; campaignList.append(empty); }
+  limitVisibleCards(campaignList, VISIBLE_SOURCES);
+  const archive = document.querySelector('#archive');
+  archive.hidden = archivedCampaigns.length === 0;
+  document.querySelector('#archive-count').textContent = String(archivedCampaigns.length);
+  document.querySelector('#archive-list').replaceChildren(...archivedCampaigns.map(([key, group]) => campaignCard(key, group)));
+  if (archivedCampaigns.some(([key]) => key === selectedCampaignId)) archive.open = true;
   const group = campaigns.get(selectedCampaignId) || [];
   const sourceDetail = document.querySelector('#sources'); sourceDetail.replaceChildren();
+  if (group.length) {
+    const isArchived = group.some(job => job.archivedAt);
+    const row = document.createElement('div'); row.className = 'archive-row';
+    const written = new Date(writtenAt(group[0])).toLocaleDateString('ko-KR');
+    const note = document.createElement('small'); note.textContent = isArchived ? `창고에 있는 원본입니다 · 원문 작성 ${written}` : `원문 작성 ${written} · 작성 ${ARCHIVE_AFTER_DAYS}일이 지나면 창고로 옮겨집니다`;
+    row.append(note, button(isArchived ? '창고에서 꺼내기' : '창고로 보내기', async () => {
+      await api('/api/archive', { jobId: group[0].id, archived: !isArchived });
+      if (!isArchived) { selectedCampaignId = null; selectedJobId = null; }
+    }));
+    sourceDetail.append(row);
+  }
   for (const source of group[0]?.sources || []) { const block = document.createElement('div'); block.className = 'source-item'; const meta = document.createElement('small'); meta.textContent = `${source.type} · ${source.ref} · ${source.capturedAt ? new Date(source.capturedAt).toLocaleString('ko-KR') : '수집 시각 없음'}`; const pre = document.createElement('pre'); pre.textContent = source.expired ? '보관 기간이 지나 원본 사본이 정리됐습니다.' : source.text; block.append(meta, pre); sourceDetail.append(block); }
   if (!group.some(job => job.id === selectedJobId)) selectedJobId = group.find(job => job.status === 'draft' && job.draft?.images?.length)?.id || group[0]?.id || null;
   rememberSelection();
   const channelJobs = document.querySelector('#channel-jobs'); channelJobs.replaceChildren();
-  for (const job of group) channelJobs.append(channelCard(job));
+  for (const id of [...checkedChannels]) if (!group.some(job => job.id === id)) checkedChannels.delete(id);
+  if (group.length) channelJobs.append(channelBulkBar(group));
+  for (const job of group) channelJobs.append(channelPick(job));
   const jobs = document.querySelector('#jobs'); jobs.replaceChildren();
   if (!selectedJobId) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = '왼쪽에서 원본을 선택하세요.'; jobs.append(empty); }
   for (const job of cache.state.jobs.filter(item => item.id === selectedJobId)) {
@@ -387,31 +504,15 @@ async function refresh() {
       const title = document.createElement('h4'); title.textContent = '발행'; panel.append(title);
       const note = document.createElement('p'); note.textContent = `${account?.handle || job.accountHandle} · 이미지 ${job.draft.images.length}장 · 발행을 누르면 표시된 글과 이미지를 함께 승인하고 지정 시각 예약 등록을 시작합니다.`; panel.append(note);
       const row = document.createElement('div'); row.className = 'publish-row';
-      const defaultTime = new Date(Date.now() + 24 * 60 * 60 * 1000); defaultTime.setSeconds(0, 0); defaultTime.setMinutes(Math.ceil(defaultTime.getMinutes() / 10) * 10);
-      const time = document.createElement('input'); time.type = 'datetime-local'; time.step = '600'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id) || localDateTime(defaultTime); time.oninput = () => scheduleInputs.set(job.id, time.value);
-      let conflict = null;
-      const missing = job.draft.images.filter(image => !image.generatedPath && !image.pendingPath).length;
-      const publish = button('발행', async () => {
-        const parsed = new Date(time.value); if (!time.value || Number.isNaN(parsed.getTime())) throw new Error('공개 시각을 지정하세요.');
-        if (parsed.getTime() % (10 * 60_000) !== 0) throw new Error('공개 시각은 10분 단위로 지정하세요.');
-        const at = parsed.toISOString();
-        const standardUnverifiedAcknowledged = job.status === 'draft' && !hasDraftStandard(job) ? await confirmUnverifiedStandard() : false;
-        if (job.status === 'draft' && !hasDraftStandard(job) && !standardUnverifiedAcknowledged) return;
-        await api(job.status === 'draft' ? '/api/publish-reservation' : '/api/schedule', { jobId: job.id, at, conflictAcknowledged: conflict?.checked === true, standardUnverifiedAcknowledged });
-        await api('/api/start', { jobId: job.id });
-        await preparedBrowser(job.id, await api('/api/prepare-browser', { jobId: job.id }));
-      }, () => missing > 0 ? `이미지 ${missing}장을 아직 만들지 않아 발행할 수 없습니다. 이미지를 만들거나 제안을 제외하세요.` : null);
+      if (!scheduleInputs.has(job.id)) scheduleInputs.set(job.id, defaultPublishTime());
+      const time = document.createElement('input'); time.type = 'datetime-local'; time.step = '600'; time.setAttribute('aria-label', '공개 시각'); time.value = scheduleInputs.get(job.id); time.oninput = () => scheduleInputs.set(job.id, time.value);
+      const missing = missingImages(job);
+      const publish = button('발행', async () => { await publishJob(job, time.value); }, () => missing > 0 ? `이미지 ${missing}장을 아직 만들지 않아 발행할 수 없습니다. 이미지를 만들거나 제안을 제외하세요.` : null);
       row.append(time);
-      if (job.status === 'draft' && missing) row.append(button('이미지 만들기', async () => {
-        if (job.imageProvider !== 'codex') await api('/api/images/provider', { jobId: job.id, provider: 'codex' });
-        if (!job.draft.imagePlanApproved) await api('/api/images/approve-plan', { jobId: job.id });
-        const remaining = job.draft.images.filter(image => !image.generatedPath && !image.pendingPath);
-        for (const [index, image] of remaining.entries()) { say(`이미지 ${index + 1}/${remaining.length} 생성 중`, 300_000); await api('/api/images/generate', { jobId: job.id, imageId: image.id }); await refresh(); }
-        say(`${remaining.length}개 이미지가 준비됐습니다. 확인한 뒤 발행하세요.`, 60_000);
-      }));
+      if (job.status === 'draft' && missing) row.append(button('이미지 만들기', async () => { await generateImagesFor([job.id]); }));
       row.append(publish); panel.append(row);
       const hint = document.createElement('p'); hint.textContent = missing ? `이미지 ${missing}장을 먼저 만드세요.` : !hasDraftStandard(job) ? '지침 적용 기록이 없어 발행 시 확인 다이얼로그가 열립니다.' : '이미지마다 승인할 필요 없이 발행 한 번으로 진행합니다.'; panel.append(hint);
-      if (job.diagnostics?.some(item => item.code === 'source_conflict')) { const label = document.createElement('label'); conflict = document.createElement('input'); conflict.type = 'checkbox'; label.append(conflict, ' 출처 충돌을 확인했습니다'); panel.append(label); }
+      if (job.diagnostics?.some(item => item.code === 'source_conflict')) { const label = document.createElement('label'); const conflict = document.createElement('input'); conflict.type = 'checkbox'; conflict.checked = conflictChecks.has(job.id); conflict.onchange = () => conflict.checked ? conflictChecks.add(job.id) : conflictChecks.delete(job.id); label.append(conflict, ' 출처 충돌을 확인했습니다'); panel.append(label); }
       article.append(panel);
     }
     const advanced = document.createElement('details'); advanced.className = 'advanced-actions';
@@ -464,6 +565,16 @@ function elapsedText(ms) {
   const seconds = Math.max(0, Math.round(ms / 1000));
   return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분 ${seconds % 60}초`;
 }
+const IMAGE_ROUTES = ['/api/images/generate', '/api/images/regenerate', '/api/images/generate-batch'];
+// Image work: finished images out of the total, plus the current image estimated from the average image time
+// (capped below 100% until the server reports it done).
+function activityPercent(entry) {
+  if (!IMAGE_ROUTES.includes(entry.route)) return null;
+  if (entry.status !== 'running') return entry.status === 'done' ? 100 : null;
+  const done = entry.progress?.done ?? 0, total = entry.progress?.total ?? 1;
+  const current = Math.min(0.95, (entry.progress ? entry.progress.itemElapsedMs : entry.elapsedMs) / Math.max(1, averageImageMs));
+  return Math.min(99, Math.floor(((done + (done < total ? current : 0)) / total) * 100));
+}
 function activityItem(entry) {
   const item = document.createElement('li');
   item.className = `activity-item ${entry.status}`;
@@ -475,6 +586,14 @@ function activityItem(entry) {
   status.textContent = entry.status === 'running' ? `${activityStatusLabels.running} · ${elapsedText(entry.elapsedMs)}` : `${activityStatusLabels[entry.status]} · ${elapsedText(entry.elapsedMs)} 걸림`;
   head.append(label, status);
   item.append(head);
+  const percent = activityPercent(entry);
+  if (percent !== null) {
+    const bar = document.createElement('div'); bar.className = 'activity-bar'; bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100'); bar.setAttribute('aria-valuenow', String(percent));
+    const fill = document.createElement('span'); fill.style.width = `${percent}%`; bar.append(fill);
+    const caption = document.createElement('small'); caption.className = 'activity-bar-caption';
+    caption.textContent = entry.progress ? `이미지 ${entry.progress.done}/${entry.progress.total}장 · ${percent}%${entry.status === 'running' ? ` · 한 장 평균 ${elapsedText(averageImageMs)}` : ''}` : `${percent}% · 한 장 평균 ${elapsedText(averageImageMs)} 기준`;
+    item.append(bar, caption);
+  }
   for (const text of [entry.title, entry.detail, entry.error && `사유: ${entry.error}`]) {
     if (!text) continue;
     const line = document.createElement('small');
@@ -486,7 +605,7 @@ function activityItem(entry) {
 async function refreshActivity() {
   clearTimeout(activityTimer);
   let activities = [];
-  try { activities = (await api('/api/activity')).activities; } catch { /* the next poll retries */ }
+  try { const result = await api('/api/activity'); activities = result.activities; if (Number.isFinite(result.averageImageMs)) averageImageMs = result.averageImageMs; } catch { /* the next poll retries */ }
   const running = activities.filter(entry => entry.status === 'running');
   const count = document.querySelector('#activity-count');
   count.hidden = running.length === 0;

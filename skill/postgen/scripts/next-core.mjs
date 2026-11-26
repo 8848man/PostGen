@@ -25,6 +25,7 @@ export function validateState(state) {
     if (job.projectName !== undefined && job.projectName !== null && !nonempty(job.projectName, 80)) throw new Error('Invalid project name');
     if (job.draft && (!nonempty(job.draft.title, 300) || !nonempty(job.draft.body) || !Array.isArray(job.draft.claims) || !Array.isArray(job.draft.images) || (job.draft.headings !== undefined && (!Array.isArray(job.draft.headings) || job.draft.headings.some(heading => !nonempty(heading, 300)))))) throw new Error('Invalid draft');
     if (job.draft?.tags !== undefined) cleanTags(job.draft.tags);
+    if ([job.archivedAt, job.archiveReleasedAt].some(value => value !== undefined && value !== null && !iso(value))) throw new Error('Invalid archive time');
     if (job.review && (!['rejected','improvement_requested'].includes(job.review.decision) || !nonempty(job.review.note, 2000) || !iso(job.review.at))) throw new Error('Invalid draft review');
     if (job.imageProvider !== undefined && !['manual', 'codex'].includes(job.imageProvider)) throw new Error('Invalid image host');
     if ((['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','expired'].includes(job.status) || job.status === 'published' && job.publication?.source !== 'manual') && (!job.approval?.at || !job.draft)) throw new Error('Approved job needs a draft');
@@ -587,6 +588,54 @@ export function pruneOldSources(state, months = 3, now = new Date()) {
     changed = true;
   }
   if (changed) next.revision++;
+  return validateState(next);
+}
+
+// Archive (창고): source campaigns whose original was written more than 14 days ago leave the main list.
+// The written time is the date at the start of a vault post's file name (2026-11-25-daily-…, Korean time),
+// otherwise when the job was registered. Archiving keeps everything; it only hides the campaign from the list.
+export const ARCHIVE_AFTER_DAYS = 14;
+// A campaign with a reservation still being prepared, registered or checked stays visible.
+const ARCHIVE_BLOCKING_STATUSES = ['approved','scheduled','due','awaiting_registration','preparing','review_required','ready_to_register','submitting','registered','verification_due','unknown'];
+const campaignKey = job => job.campaignId || job.id;
+
+export function sourceWrittenAt(job) {
+  for (const source of job.sources || []) {
+    const match = String(source.ref || '').replaceAll('\\', '/').split('/').pop().match(/^(\d{4})-(\d{2})-(\d{2})(?!\d)/);
+    if (!match) continue;
+    const at = Date.parse(`${match[1]}-${match[2]}-${match[3]}T00:00:00+09:00`);
+    if (Number.isFinite(at)) return new Date(at).toISOString();
+  }
+  return job.createdAt;
+}
+
+export function archiveStaleCampaigns(state, now = new Date()) {
+  const next = structuredClone(validateState(state));
+  const groups = new Map();
+  for (const job of next.jobs) { const key = campaignKey(job); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(job); }
+  const cutoff = now.getTime() - ARCHIVE_AFTER_DAYS * DAY;
+  let changed = false;
+  for (const group of groups.values()) {
+    if (group.some(job => job.archivedAt || job.archiveReleasedAt || ARCHIVE_BLOCKING_STATUSES.includes(job.status))) continue;
+    if (Math.max(...group.map(job => Date.parse(sourceWrittenAt(job)))) >= cutoff) continue;
+    for (const job of group) job.archivedAt = now.toISOString();
+    changed = true;
+  }
+  if (changed) next.revision++;
+  return validateState(next);
+}
+
+// Manual move in or out of the archive. Taking a campaign out keeps it out: automatic archiving skips it.
+export function setCampaignArchived(state, id, archived, now = new Date()) {
+  const next = structuredClone(validateState(state));
+  const target = next.jobs.find(job => job.id === id || job.campaignId === id);
+  if (!target) throw new Error('Unknown job');
+  for (const job of next.jobs.filter(item => campaignKey(item) === campaignKey(target))) {
+    if (archived) { job.archivedAt = now.toISOString(); delete job.archiveReleasedAt; }
+    else { job.archivedAt = null; job.archiveReleasedAt = now.toISOString(); }
+    job.updatedAt = now.toISOString();
+  }
+  next.revision++;
   return validateState(next);
 }
 
