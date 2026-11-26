@@ -22,6 +22,11 @@
 
 Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저장한 스크립트 파일을 쓴다. 셸 명령 안의 인라인 Python·sed·heredoc 스크립트는 쓰지 않는다. 인라인 이스케이프가 깨지고 CRLF 줄바꿈이 바뀌어 diff가 커지기 때문이다.
 
+명령은 실행 도구의 승인 규칙(Codex 승인 규칙 등)이 알아볼 수 있는 형태로 적는다. 형태가 다르면 같은 명령도 매번 승인을 다시 묻는다.
+
+- 명령 앞에 환경 변수를 붙이지 않는다(`POSTGEN_DATA_DIR=... node ...`, `$env:X='...'; node ...` 금지). `package.json`의 `npm run` 스크립트로 실행한다. 볼트 원문 작업처럼 검토 화면 데이터 폴더가 필요한 `next-cli` 명령은 `npm run cli -- <명령> <인수>`로 실행한다. 이 스크립트는 검토 화면 런처와 같은 방식으로 데이터 폴더를 찾고, 못 찾으면 실행하지 않는다.
+- `gh api` 조회는 `gh api --method GET <경로>`처럼 `--method GET`을 `gh api` 바로 뒤에 붙인다. 메서드는 한 번만 적는다(`-X`와 `--method`를 함께 쓰거나 두 번 적지 않는다).
+
 ## 시험 실행
 
 - 기본 단위 시험은 `npm test`, 브라우저·검토 화면 스모크 시험은 `npm run test:smoke`로 실행한다. 개별 확인은 `npm run test:browser`, `npm run test:review`를 사용한다. 검토 화면 스모크 시험은 자체적으로 시험용 `POSTGEN_DATA_DIR`을 설정한다.
@@ -60,7 +65,7 @@ Windows에서 파일을 고칠 때는 패치·편집 도구나 디스크에 저�
 
 초안의 `images`에는 본문 내용에 맞는 이미지 장면 제안과 배치 위치를 포함한다. 이미지 파일을 지금 생성하지 않아도 장면 제안은 작성한다. 이미지 없이 진행하려면 그 선택을 명시하고 CLI 경고를 확인한다.
 
-- 검토 화면 런처(`start-postgen-review.cmd` → `scripts/open-review.mjs`)는 `POSTGEN_DATA_DIR` 환경 변수가 있으면 그 폴더를, 없으면 기존 포스팅용 크롬 데이터 폴더(`%USERPROFILE%\Documents\ChatGPT\new_sample\postgen-data`)를 쓴다. 작업을 만드는 명령에도 같은 `POSTGEN_DATA_DIR`을 넘긴다.
+- 검토 화면 런처(`start-postgen-review.cmd` → `scripts/open-review.mjs`)는 `POSTGEN_DATA_DIR` 환경 변수가 있으면 그 폴더를, 없으면 기존 포스팅용 크롬 데이터 폴더(`%USERPROFILE%\Documents\ChatGPT\new_sample\postgen-data`)를 쓴다. 작업을 만드는 명령은 같은 폴더를 쓰는 `npm run cli -- <명령>`으로 실행한다.
 - 실행 도구 환경의 기본 PostGen 데이터 경로는 검토 화면과 다를 수 있고, 빈 계정 등록부일 수 있다(ISSUE-086). 작업을 만들기 전에 그 폴더의 `account-registry.json`에 대상 게시 계정이 있고 `next/jobs.json`에 기존 작업이 보이는지 확인한다. 둘 다 비어 있으면 작업을 만들지 말고 사용자에게 데이터 폴더를 묻는다.
 - 시험용 데이터는 별도 `POSTGEN_DATA_DIR`로 분리하며, 실제 데이터 폴더에서 시험하지 않는다.
 
