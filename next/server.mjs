@@ -19,7 +19,7 @@ import { runImageAttempts } from './host-image-flow.mjs';
 import { loadConnectors, registerConnector, inspectConnector, approveConnector } from './connectors.mjs';
 import { readConnectedSource, prepareWithMcp, registerScheduledWithMcp, tagsNeedBrowser } from './mcp-client.mjs';
 import { openEditor, resumeEditorSession, readEditorSession, submitPlatformReservation, recheckPlatformReservation } from './browser-adapter.mjs';
-import { loadSettings, updateSettings } from './settings.mjs';
+import { loadSettings, updateSettings, channelEnabled } from './settings.mjs';
 import { codexModelOptions } from './codex-models.mjs';
 import { generateJobDraft } from './draft-job.mjs';
 import { isSocialChannel, SOCIAL_CHANNELS } from '../skill/postgen/scripts/channel-rules.mjs';
@@ -154,7 +154,7 @@ const server = http.createServer(async (req, res) => {
       const postingUrl = String(input.postingUrl || '').trim() ? validatePostingUrl(account, input.postingUrl) : null;
       return json(res, 200, { registry: mutateRegistry(current => setPostingUrl(current, account.id, postingUrl)), postingAccounts: postingAccounts() });
     }
-    if (url.pathname === '/api/login-status') return json(res, 200, { statuses: await checkLoginStatus(loadRegistry().accounts) });
+    if (url.pathname === '/api/login-status') { const settings = loadSettings(); return json(res, 200, { statuses: await checkLoginStatus(loadRegistry().accounts.filter(account => channelEnabled(settings, account.channel))) }); }
     if (url.pathname === '/api/login-open') {
       const account = loadRegistry().accounts.find(item => item.id === input.accountId);
       if (!account) throw new Error('Unknown account');
@@ -180,8 +180,11 @@ const server = http.createServer(async (req, res) => {
       if (!['codex', 'claude'].includes(input.model || 'codex')) throw new Error('Codex or Claude Code subscription is required');
       if (!['manual', 'codex'].includes(input.imageProvider || 'manual')) throw new Error('Select manual or Codex image generation');
       const ids = Array.isArray(input.accountIds) ? input.accountIds : [input.accountId];
-      const accounts = ids.map(id => loadRegistry().accounts.find(item => item.id === id));
-      if (!accounts.length || accounts.some(account => !account)) throw new Error('Select registered accounts');
+      const selected = ids.map(id => loadRegistry().accounts.find(item => item.id === id));
+      if (!selected.length || selected.some(account => !account)) throw new Error('Select registered accounts');
+      // Off channels (채널 설정) get no drafts for a new source.
+      const settings = loadSettings(), accounts = selected.filter(account => channelEnabled(settings, account.channel));
+      if (!accounts.length) throw new Error('All selected accounts are on channels turned off in channel settings');
       const sources = await collectSelected(input.sources, { workspace: input.workspace || process.cwd(), connectedReader: async spec => {
         const connector = loadConnectors().servers.find(item => item.id === spec.connectorId);
         if (!connector) throw new Error('Unknown connected source server');

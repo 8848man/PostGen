@@ -19,6 +19,12 @@ function job(state, id) {
   if (!found) throw new Error('Unknown job');
   return found;
 }
+// Accounts on channels that are on in the review screen's 채널 설정 (settings.json next to jobs.json).
+async function enabledAccounts(accounts) {
+  const { loadSettings, channelEnabled } = await import('../../../next/settings.mjs');
+  const settings = loadSettings();
+  return accounts.filter(account => channelEnabled(settings, account.channel));
+}
 const vaultSources = sources => Array.isArray(sources) && sources.length > 0 && sources.every(source => typeof source.ref === 'string' && source.ref.startsWith('posts/'));
 const campaignJobs = (state, id) => state.jobs.filter(item => item.campaignId === job(state, id).campaignId);
 async function run(args) {
@@ -28,7 +34,7 @@ async function run(args) {
   if (command === 'create') {
     const spec = input(), registry = loadRegistry();
     if (spec.allRegisteredAccounts && (!vaultSources(spec.sources) || spec.accountIds !== undefined)) throw new Error('All registered accounts require vault post sources and no accountIds');
-    const ids = spec.allRegisteredAccounts ? registry.accounts.map(account => account.id) : spec.accountIds;
+    const ids = spec.allRegisteredAccounts ? (await enabledAccounts(registry.accounts)).map(account => account.id) : spec.accountIds;
     if (!Array.isArray(ids) || !ids.length) throw new Error('Select account IDs');
     const accounts = ids.map(accountId => registry.accounts.find(item => item.id === accountId));
     if (accounts.some(account => !account)) throw new Error('Unknown account');
@@ -44,7 +50,7 @@ async function run(args) {
     const registry = loadRegistry(), current = loadState(), siblings = campaignJobs(current, id);
     if (!vaultSources(siblings[0].sources)) throw new Error('Only vault post campaigns can add all registered accounts');
     const existing = new Set(siblings.map(item => item.accountId));
-    const missing = registry.accounts.filter(account => !existing.has(account.id));
+    const missing = (await enabledAccounts(registry.accounts)).filter(account => !existing.has(account.id));
     if (!missing.length) return [];
     const next = update(state => addCampaignAccounts(state, siblings[0].campaignId, missing.map(account => ({ id: account.id, handle: account.handle, goal: account.defaultGoal }))));
     return next.jobs.filter(item => item.campaignId === siblings[0].campaignId && !existing.has(item.accountId)).map(item => ({ id: item.id, campaignId: item.campaignId, accountId: item.accountId }));

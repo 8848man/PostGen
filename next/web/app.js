@@ -93,6 +93,10 @@ const channelLabels = { naver: '네이버 블로그', tistory: '티스토리', x
 const SOCIAL_CHANNELS = ['x', 'linkedin', 'instagram', 'reddit'];
 const channelOf = job => cache.registry.accounts.find(item => item.id === job.accountId)?.channel;
 const isSocialJob = job => SOCIAL_CHANNELS.includes(channelOf(job));
+// 채널 설정: an off channel's posts stay visible but greyed, and are left out of counts and bulk actions.
+const TOGGLE_CHANNELS = ['naver', 'tistory', 'x', 'linkedin', 'instagram', 'reddit'];
+const channelOn = channel => cache?.settings?.channels?.[channel] !== false;
+const jobOn = job => channelOn(channelOf(job));
 function excerpt(value, max = 140) { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > max ? `${text.slice(0, max)}…` : text; }
 function localDateTime(date) { const pad = value => String(value).padStart(2, '0'); return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`; }
 async function api(path, data) {
@@ -178,15 +182,17 @@ function writtenAt(job) {
   }
   return job.createdAt;
 }
-function campaignCard(key, group) {
+function campaignCard(key, allJobs) {
+  const group = allJobs.filter(jobOn);
   const published = group.filter(job => job.status === 'published').length;
   const scheduled = group.filter(job => scheduledStatuses.includes(job.status)).length;
-  const stage = published === group.length ? 'complete' : published + scheduled === group.length ? 'scheduled' : published || scheduled ? 'in-progress' : '';
-  const stageLabel = { complete: '✓ 모든 채널 발행 완료', scheduled: published ? '⏱ 남은 채널 예약 발행 등록됨' : '⏱ 예약 발행 등록됨', 'in-progress': published ? '◐ 일부 채널 발행 완료' : '◔ 일부 채널 예약 등록됨', '': '○ 발행 완료 전' }[stage];
+  const stage = !group.length ? '' : published === group.length ? 'complete' : published + scheduled === group.length ? 'scheduled' : published || scheduled ? 'in-progress' : '';
+  const stageLabel = !group.length ? '○ 켜진 채널 글 없음' : { complete: '✓ 모든 채널 발행 완료', scheduled: published ? '⏱ 남은 채널 예약 발행 등록됨' : '⏱ 예약 발행 등록됨', 'in-progress': published ? '◐ 일부 채널 발행 완료' : '◔ 일부 채널 예약 등록됨', '': '○ 발행 완료 전' }[stage];
   const item = document.createElement('button'); item.type = 'button'; item.className = `pick-card campaign-card ${stage} ${key === selectedCampaignId ? 'selected' : ''}`;
-  const source = group[0].sources[0];
-  const title = document.createElement('strong'); title.textContent = excerpt(source?.text || group[0].draft?.title || '원본 사본 만료', 55);
-  const meta = document.createElement('small'); meta.textContent = `${group.length}개 채널 글 · 원문 ${new Date(writtenAt(group[0])).toLocaleDateString('ko-KR')} · ${group[0].sources.length}개 출처`;
+  const source = allJobs[0].sources[0];
+  const off = allJobs.length - group.length;
+  const title = document.createElement('strong'); title.textContent = excerpt(source?.text || allJobs[0].draft?.title || '원본 사본 만료', 55);
+  const meta = document.createElement('small'); meta.textContent = `${group.length}개 채널 글${off ? ` (꺼진 채널 ${off}개 제외)` : ''} · 원문 ${new Date(writtenAt(allJobs[0])).toLocaleDateString('ko-KR')} · ${allJobs[0].sources.length}개 출처`;
   const progress = document.createElement('span'); progress.className = 'campaign-progress'; progress.textContent = `${stageLabel}${scheduled ? ` · 예약 ${scheduled}` : ''} · 발행 ${published}/${group.length}`;
   item.append(title, meta, progress); item.onclick = () => { selectedCampaignId = key; selectedJobId = null; refresh().catch(error => say(error.message)); };
   return item;
@@ -201,11 +207,13 @@ function limitVisibleCards(list, count) {
     if (height > 0) { list.style.maxHeight = `${Math.ceil(height) + 2}px`; list.classList.add('scroll-limited'); }
   });
 }
-function channelBulkBar(group) {
+function channelBulkBar(allJobs) {
+  const group = allJobs.filter(jobOn);
   const bar = document.createElement('div'); bar.className = 'channel-bulk';
   const checked = () => group.filter(job => checkedChannels.has(job.id));
   const all = document.createElement('label'); const allBox = document.createElement('input'); allBox.type = 'checkbox';
-  allBox.checked = group.every(job => checkedChannels.has(job.id)); allBox.indeterminate = !allBox.checked && group.some(job => checkedChannels.has(job.id));
+  allBox.disabled = !group.length;
+  allBox.checked = group.length > 0 && group.every(job => checkedChannels.has(job.id)); allBox.indeterminate = !allBox.checked && group.some(job => checkedChannels.has(job.id));
   allBox.onchange = () => { for (const job of group) allBox.checked ? checkedChannels.add(job.id) : checkedChannels.delete(job.id); refresh().catch(error => say(error.message)); };
   all.append(allBox, ` 전체 선택 (${checked().length}/${group.length})`);
   const images = button('선택 채널 이미지 생성', async () => {
@@ -218,10 +226,14 @@ function channelBulkBar(group) {
   return bar;
 }
 function channelPick(job) {
-  const wrap = document.createElement('div'); wrap.className = 'channel-pick';
-  const box = document.createElement('input'); box.type = 'checkbox'; box.checked = checkedChannels.has(job.id); box.setAttribute('aria-label', `${channelName(job.id)} 선택`);
+  const on = jobOn(job);
+  const wrap = document.createElement('div'); wrap.className = `channel-pick${on ? '' : ' channel-off'}`;
+  const box = document.createElement('input'); box.type = 'checkbox'; box.checked = on && checkedChannels.has(job.id); box.disabled = !on; box.setAttribute('aria-label', `${channelName(job.id)} 선택`);
+  if (!on) box.title = '채널 설정에서 꺼진 채널입니다';
   box.onchange = () => { box.checked ? checkedChannels.add(job.id) : checkedChannels.delete(job.id); refresh().catch(error => say(error.message)); };
-  wrap.append(box, channelCard(job));
+  const card = channelCard(job);
+  if (!on) { const badge = document.createElement('span'); badge.className = 'channel-off-badge'; badge.textContent = '꺼진 채널'; card.prepend(badge); }
+  wrap.append(box, card);
   return wrap;
 }
 function channelCard(job) {
@@ -318,19 +330,23 @@ function renderPostingAccounts() {
   list.replaceChildren();
   for (const entry of cache?.postingAccounts || []) {
     const account = cache.registry.accounts.find(item => item.id === entry.accountId);
-    if (account) list.append(postingAccountRow(entry, account));
+    if (!account) continue;
+    const row = postingAccountRow(entry, account);
+    if (!channelOn(account.channel)) { row.classList.add('channel-off'); row.title = '채널 설정에서 꺼진 채널입니다. 로그인 확인을 하지 않습니다.'; }
+    list.append(row);
   }
   if (!list.children.length) list.textContent = '네이버·티스토리 계정을 추가하면 여기에 표시됩니다.';
 }
+const postingAccountOn = entry => channelOn(cache?.registry?.accounts.find(item => item.id === entry.accountId)?.channel);
 async function checkPostingLogins() {
   loginCheckedAt = Date.now();
-  for (const entry of cache?.postingAccounts || []) loginStatuses[entry.accountId] = { state: 'checking' };
+  for (const entry of (cache?.postingAccounts || []).filter(postingAccountOn)) loginStatuses[entry.accountId] = { state: 'checking' };
   renderPostingAccounts();
   try {
     const { statuses } = await api('/api/login-status', {});
     loginStatuses = Object.fromEntries(statuses.map(status => [status.accountId, status]));
   } catch (error) {
-    for (const entry of cache?.postingAccounts || []) loginStatuses[entry.accountId] = { state: 'unknown', reason: error.message };
+    for (const entry of (cache?.postingAccounts || []).filter(postingAccountOn)) loginStatuses[entry.accountId] = { state: 'unknown', reason: error.message };
   }
   renderPostingAccounts();
 }
@@ -351,7 +367,8 @@ async function refresh() {
   const accountSelect = document.querySelector('#accounts'); const selectedAccounts = new Set([...accountSelect.selectedOptions].map(option => option.value)); accountSelect.replaceChildren();
   const sampleAccountSelect = document.querySelector('#sample-accounts'); sampleAccountSelect.replaceChildren();
   const assetAccountSelect = document.querySelector('#asset-accounts'); assetAccountSelect.replaceChildren();
-  for (const account of cache.registry.accounts) { const option = document.createElement('option'); option.value = account.id; option.textContent = `${account.channel} / ${account.handle}`; option.selected = selectedAccounts.has(account.id); accountSelect.append(option); }
+  for (const account of cache.registry.accounts) { const option = document.createElement('option'); option.value = account.id; option.disabled = !channelOn(account.channel); option.textContent = `${account.channel} / ${account.handle}${option.disabled ? ' (꺼진 채널)' : ''}`; option.selected = !option.disabled && selectedAccounts.has(account.id); accountSelect.append(option); }
+  renderChannelToggles();
   for (const account of cache.registry.accounts) { const option = document.createElement('option'); option.value = account.id; option.textContent = `${account.channel} / ${account.handle}`; sampleAccountSelect.append(option); }
   for (const account of cache.registry.accounts) { const option = document.createElement('option'); option.value = account.id; option.textContent = `${account.channel} / ${account.handle}`; assetAccountSelect.append(option); }
   const samples = document.querySelector('#samples'); samples.replaceChildren();
@@ -391,10 +408,10 @@ async function refresh() {
     sourceDetail.append(row);
   }
   for (const source of group[0]?.sources || []) { const block = document.createElement('div'); block.className = 'source-item'; const meta = document.createElement('small'); meta.textContent = `${source.type} · ${source.ref} · ${source.capturedAt ? new Date(source.capturedAt).toLocaleString('ko-KR') : '수집 시각 없음'}`; const pre = document.createElement('pre'); pre.textContent = source.expired ? '보관 기간이 지나 원본 사본이 정리됐습니다.' : source.text; block.append(meta, pre); sourceDetail.append(block); }
-  if (!group.some(job => job.id === selectedJobId)) selectedJobId = group.find(job => job.status === 'draft' && job.draft?.images?.length)?.id || group[0]?.id || null;
+  if (!group.some(job => job.id === selectedJobId)) selectedJobId = group.find(job => jobOn(job) && job.status === 'draft' && job.draft?.images?.length)?.id || group.find(jobOn)?.id || group[0]?.id || null;
   rememberSelection();
   const channelJobs = document.querySelector('#channel-jobs'); channelJobs.replaceChildren();
-  for (const id of [...checkedChannels]) if (!group.some(job => job.id === id)) checkedChannels.delete(id);
+  for (const id of [...checkedChannels]) if (!group.some(job => job.id === id && jobOn(job))) checkedChannels.delete(id);
   if (group.length) channelJobs.append(channelBulkBar(group));
   for (const job of group) channelJobs.append(channelPick(job));
   const jobs = document.querySelector('#jobs'); jobs.replaceChildren();
@@ -590,6 +607,34 @@ document.querySelector('#connector').onsubmit = async event => { event.preventDe
 document.querySelector('#discover').onclick = async () => { try { const catalog = await api('/api/discover'); const list = document.querySelector('#record-list'); list.replaceChildren(); for (const source of catalog.sources) { const row = document.createElement('label'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'record-source'; checkbox.value = source.sourceId; row.append(checkbox, ` ${source.provider}: ${source.preview}`); list.append(row); } } catch (error) { say(error.message); } };
 document.querySelector('#job').onsubmit = submitJob;
 const projectField = document.createElement('label'); projectField.textContent = '프로젝트 표시명 (원본 경로에서 알 수 있으면 자동 적용)'; const projectInput = document.createElement('input'); projectInput.name = 'projectName'; projectInput.maxLength = 80; projectInput.placeholder = '예: PostGen'; projectField.append(projectInput); document.querySelector('#job').querySelector('[name="audience"]').closest('label').before(projectField);
+// 채널 설정 dialog: one switch per channel with how many accounts are registered on it.
+function renderChannelToggles() {
+  const dialog = document.querySelector('#channel-settings');
+  if (dialog.open) return;
+  const list = document.querySelector('#channel-toggles'); list.replaceChildren();
+  for (const channel of TOGGLE_CHANNELS) {
+    const label = document.createElement('label'); label.className = 'channel-toggle';
+    const text = document.createElement('span'); const name = document.createElement('strong'); name.textContent = channelLabels[channel];
+    const count = (cache?.registry?.accounts || []).filter(account => account.channel === channel).length;
+    const note = document.createElement('small'); note.textContent = count ? ` 계정 ${count}개` : ' 등록된 계정 없음';
+    text.append(name, note);
+    const box = document.createElement('input'); box.type = 'checkbox'; box.name = channel; box.checked = channelOn(channel); box.setAttribute('role', 'switch'); box.setAttribute('aria-label', `${channelLabels[channel]} 켜기`);
+    label.append(text, box); list.append(label);
+  }
+}
+document.querySelector('#channel-settings-open').onclick = () => { renderChannelToggles(); document.querySelector('#channel-settings').showModal(); };
+document.querySelector('#channel-settings-cancel').onclick = () => document.querySelector('#channel-settings').close('cancel');
+document.querySelector('#channel-settings-form').onsubmit = async event => {
+  event.preventDefault();
+  const channels = Object.fromEntries([...document.querySelectorAll('#channel-toggles input')].map(input => [input.name, input.checked]));
+  try {
+    await api('/api/settings', { channels });
+    document.querySelector('#channel-settings').close('save');
+    await refresh();
+    const off = TOGGLE_CHANNELS.filter(channel => !channels[channel]).map(channel => channelLabels[channel]);
+    say(off.length ? `채널 설정을 저장했습니다. 꺼진 채널: ${off.join(', ')}` : '채널 설정을 저장했습니다. 모든 채널이 켜져 있습니다.');
+  } catch (error) { say(error.message, 60_000); }
+};
 // Floating activity button: long work runs in the server, so the list comes from /api/activity, not this page.
 const activityStatusLabels = { running: '진행 중', done: '완료', failed: '실패' };
 let activityOpen = false, activityTimer = null, lastRunningIds = new Set();
